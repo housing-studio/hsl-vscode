@@ -1,0 +1,38 @@
+{
+  "name": "housing-studio",
+  "displayName": "Housing Studio",
+  "description": "Syntax highlighter for the HSL language.",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.76.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "hsl-source",
+        "aliases": [
+          "HSL",
+          "hsl"
+        ],
+        "extensions": [
+          ".hsl"
+        ],
+        "icon": {
+          "light": "./icons/favicon-dark.png",
+          "dark": "./icons/favicon-light.png"
+        },
+        "configuration": "./language-configuration-source.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "hsl-source",
+        "scopeName": "source.hsl",
+        "path": "./syntaxes/hsl.tmLanguage.json"
+      }
+    ]
+  }
+}

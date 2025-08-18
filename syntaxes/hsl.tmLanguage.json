@@ -1,0 +1,285 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "Housing Studio",
+	"patterns": [
+		{
+			"include": "#comments"
+		},
+		{
+			"include": "#strings"
+		},
+		{
+			"include": "#formats"
+		},
+		{
+			"include": "#chars"
+		},
+		{
+			"include": "#controls"
+		},
+		{
+			"include": "#scoreboard"
+		},
+		{
+			"include": "#generics"
+		},
+		{
+			"include": "#types"
+		},
+		{
+			"include": "#operators"
+		},
+		{
+			"include": "#names"
+		},
+		{
+			"include": "#calls"
+		},
+		{
+			"include": "#literals"
+		},
+		{
+			"include": "#names"
+		}
+	],
+	"repository": {
+		"comments": {
+			"patterns": [
+				{
+					"name": "comment.line.hsl",
+					"match": "//(.*)"
+				},
+				{
+					"name": "comment.block",
+					"begin": "/\\*",
+					"end": "\\*/"
+				}
+			]
+		},
+		"strings": {
+			"name": "string.quoted.double.hsl",
+			"begin": "\"",
+			"end": "\"",
+			"patterns": [
+				{
+					"name": "constant.character.escape.hsl",
+					"match": "\\\\."
+				}
+			]
+		},
+		"formats": {
+			"name": "string.quoted.format.hsl",
+			"begin": "\\$\"",
+			"end": "\"",
+			"patterns": [
+				{
+					"name": "constant.character.escape",
+					"match": "\\{[^\\}]+\\}"
+				},
+				{
+					"name": "string.quoted.format.constant.character.escape.hsl",
+					"match": "\\\\."
+				}
+			]
+		},
+		"chars": {
+			"name": "string.quoted.double.hsl",
+			"begin": "'",
+			"end": "'",
+			"patterns": [
+				{
+					"name": "constant.character.escape.hsl",
+					"match": "\\\\."
+				}
+			]
+		},
+		"controls": {
+			"patterns": [
+				{
+					"name": "constant.language",
+					"match": "\\b(fn|command|region|menu|event|scoreboard|if|else)\\b"
+				}
+			]
+		},
+		"scoreboard": {
+			"patterns": [
+				{
+					"name": "keyword.other",
+					"match": "\\b(score)\\b"
+				},
+				{
+            		"name": "keyword.score.value",
+          		  	"match": "(?<=\\bscore\\s+)(housename|blank|guests|cookies|variable)\\b"
+        		}
+			]	
+		},
+		"types": {
+			"patterns": [
+				{
+					"name": "keyword.other",
+					"match": "\\b(stat)\\b"
+				},
+				{
+					"name": "keyword.other",
+					"match": "\\b(void|int|any|float|double|bool|string)\\b"
+				},
+				{
+					"name": "keyword.other",
+					"match": "\\b(struct|enum)\\b"
+				},
+				{
+					"name": "entity.name.type",
+					"match": "\\b\\w+(?=\\s+\\w+)",
+					"scope": "entity.name"
+				},
+				{
+					"name": "keyword.other",
+					"match": "@([A-Za-z]+)",
+					"captures": {
+						"1": {
+							"name": "keyword.other"
+						}
+					}
+				},
+				{
+					"name": "entity.name.type",
+					"match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b(?=\\s+[a-zA-Z_][a-zA-Z0-9_]*)"
+				},
+				{
+					"name": "entity.name.type",
+					"match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b(\\s*\\[\\]\\s*)+(?=\\b[a-zA-Z_][a-zA-Z0-9_]*\\b)"
+				},
+				{
+					"name": "entity.name.type",
+					"patterns": [
+						{
+							"match": "\\b([A-Za-z_]+[A-Za-z0-9_]*)\\s*\\{",
+							"captures": {
+								"1": {
+									"name": "entity.name.type"
+								}
+							}
+						}
+					]
+				},
+				{
+					"name": "entity.name.type",
+					"match": "\\b[A-Z]\\w*\\b",
+					"captures": {
+						"0": {
+							"name": "entity.name.type"
+						}
+					}
+				}
+			]
+		},
+		"generics": {
+			"name": "keyword.other",
+			"match": "\\bstruct\\s+([a-zA-Z]\\w*)(<[^>]*>)?",
+			"captures": {
+				"1": {
+					"name": "entity.name.type.struct"
+				},
+				"2": {
+					"name": "entity.name.type.generic",
+					"patterns": [
+						{
+							"name": "punctuation.definition.generic.begin",
+							"match": "<"
+						},
+						{
+							"name": "punctuation.definition.generic.end",
+							"match": ">"
+						},
+						{
+							"name": "entity.name.type",
+							"match": "\\b\\w+\\b"
+						},
+						{
+							"name": "punctuation.separator.generic",
+							"match": ","
+						}
+					]
+				}
+			}	
+		},
+		"operators": {
+			"patterns": [
+				{
+					"name": "constant.language",
+					"match": "(\\+|\\-|\\*|\\/|\\=|\\;|\\<|\\>|\\$|\\.|\\,|\\:|\\^|\\&|\\?|\\!|\\%|\\|)"
+				}
+			]
+		},
+		"calls": {
+			"name": "method-call",
+			"match": "\\b([a-zA-Z]\\w*)(<[^>]*>)?\\(",
+			"captures": {
+				"1": {
+					"name": "entity.name.function"
+				},
+				"2": {
+					"name": "entity.name.type.generic",
+					"patterns": [
+						{
+							"name": "punctuation.definition.generic.begin",
+							"match": "<"
+						},
+						{
+							"name": "punctuation.definition.generic.end",
+							"match": ">"
+						},
+						{
+							"name": "entity.name.type",
+							"match": "\\b\\w+\\b"
+						},
+						{
+							"name": "punctuation.separator.generic",
+							"match": ","
+						}
+					]
+				}
+			}
+		},
+		"names": {
+			"name": "entity.name.type",
+			"match": "(?<=\\b(struct|enum)\\s+)([a-zA-Z0-9_]*)\\b",
+			"captures": {
+				"0": {
+					"name": "support.type.class"
+				}
+			}
+		},
+		"literals": {
+			"patterns": [
+				{
+					"name": "constant.numeric",
+					"match": "\\b0[xX][\\da-fA-F]+\\b"
+				},
+				{
+					"name": "constant.numeric",
+					"match": "\\b-?\\d+(?:_\\d+)*(?:\\.\\d+(?:_\\d+)*)?(?:[eE][+-]?\\d+)?[bBsSiIlLfFdD]?\\b",
+					"scope": "constant.numeric"
+				},
+				{
+					"name": "constant.numeric",
+					"match": "\\bu\\d+(?:_\\d+)*(?:\\.\\d+(?:_\\d+)*)?(?:[eE][+-]?\\d+)?[bBsSiIlLfFdD]?\\b",
+					"scope": "constant.numeric"
+				},
+				{
+					"name": "constant.numeric",
+					"match": "\\b(true|false)\\b"
+				}, 
+				{
+					"name": "constant.numeric",
+					"match": "\\b(null|nullptr)\\b"
+				},
+				{
+					"name": "constant.numeric",
+					"match": "\\b\\d+(?:_\\d+)*(?:ns|us|µs|ms|s|m|h)+(?:\\d+(?:_\\d+)*(?:ns|us|µs|ms|s|m|h)+)*\\b"
+				}
+			]
+		}
+	},
+	"scopeName": "source.hsl"
+}
