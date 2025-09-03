@@ -117,7 +117,7 @@
 			"patterns": [
 				{
 					"name": "keyword.other",
-					"match": "\\b(stat)\\b"
+					"match": "\\b(stat|const)\\b"
 				},
 				{
 					"name": "keyword.other",
