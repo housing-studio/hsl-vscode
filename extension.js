@@ -63,13 +63,19 @@ function parseHslFile(filePath) {
 
             // Collect consecutive '//' doc comment lines immediately above
             let docLines = [];
+            let annotations = [];
             let j = i - 1;
             while (j >= 0) {
                 const prev = lines[j];
                 const prevTrim = prev.trim();
                 if (prevTrim.startsWith('//')) {
-                    // stop if there is a blank line separating blocks? We continue as long as comments are consecutive
                     docLines.push(prevTrim.replace(/^\/\/\s?/, ''));
+                    j--;
+                    continue;
+                }
+                if (prevTrim.startsWith('@')) {
+                    // Capture annotations like @loop(3s) separately
+                    annotations.push(prevTrim);
                     j--;
                     continue;
                 }
@@ -82,11 +88,15 @@ function parseHslFile(filePath) {
                 break;
             }
             docLines.reverse();
+            annotations.reverse();
             const doc = docLines.join('\n').trim();
 
+            // Combine annotations with signature
+            const fullSignature = annotations.length > 0 ? annotations.join('\n') + '\n' + signature : signature;
+            
             index[name] = {
                 doc,
-                signature,
+                signature: fullSignature,
                 params,
                 line: i,
                 character: Math.max(0, charIndex)
@@ -190,10 +200,10 @@ let enumMembersIndex = {}; // enumName -> memberName -> { doc, filePath, line, c
 // Workspace symbol indexes
 let wsFileToSymbols = new Map(); // uri.fsPath -> { constants:Set<string>, functions:Set<string>, macros:Set<string>, stats:Array<{namespace:string,name:string}> }
 let workspaceIndex = {
-    constants: new Map(), // name -> { uri, line, character }
-    functions: new Map(),
-    macros: new Map(),
-    stats: new Map(), // name -> { uri, line, character, namespace }
+    constants: new Map(), // name -> { uri, line, character, signature, doc }
+    functions: new Map(), // name -> { uri, line, character, signature, doc, params }
+    macros: new Map(), // name -> { uri, line, character, signature, doc, params }
+    stats: new Map(), // name -> { uri, line, character, namespace, signature, doc }
 };
 
 // Cache for file modification times to avoid re-parsing unchanged files
@@ -401,6 +411,64 @@ function activate(context) {
                     if (t.signature) {
                         parts.push('```hsl');
                         parts.push(t.signature);
+                        parts.push('```');
+                    }
+                    md.value = parts.join('\n');
+                    return new vscode.Hover(md);
+                }
+
+                // Workspace user symbols hover
+                if (workspaceIndex.constants.has(token)) {
+                    const info = workspaceIndex.constants.get(token);
+                    const md = new vscode.MarkdownString();
+                    md.isTrusted = true;
+                    const parts = [];
+                    if (info.doc) parts.push(info.doc);
+                    if (info.signature) {
+                        parts.push('```hsl');
+                        parts.push(info.signature);
+                        parts.push('```');
+                    }
+                    md.value = parts.join('\n');
+                    return new vscode.Hover(md);
+                }
+                if (workspaceIndex.functions.has(token)) {
+                    const info = workspaceIndex.functions.get(token);
+                    const md = new vscode.MarkdownString();
+                    md.isTrusted = true;
+                    const parts = [];
+                    if (info.doc) parts.push(info.doc);
+                    if (info.signature) {
+                        parts.push('```hsl');
+                        parts.push(info.signature);
+                        parts.push('```');
+                    }
+                    md.value = parts.join('\n');
+                    return new vscode.Hover(md);
+                }
+                if (workspaceIndex.macros.has(token)) {
+                    const info = workspaceIndex.macros.get(token);
+                    const md = new vscode.MarkdownString();
+                    md.isTrusted = true;
+                    const parts = [];
+                    if (info.doc) parts.push(info.doc);
+                    if (info.signature) {
+                        parts.push('```hsl');
+                        parts.push(info.signature);
+                        parts.push('```');
+                    }
+                    md.value = parts.join('\n');
+                    return new vscode.Hover(md);
+                }
+                if (workspaceIndex.stats.has(token)) {
+                    const info = workspaceIndex.stats.get(token);
+                    const md = new vscode.MarkdownString();
+                    md.isTrusted = true;
+                    const parts = [];
+                    if (info.doc) parts.push(info.doc);
+                    if (info.signature) {
+                        parts.push('```hsl');
+                        parts.push(info.signature);
                         parts.push('```');
                     }
                     md.value = parts.join('\n');
@@ -841,6 +909,36 @@ function indexTextDocument(document) {
     }
     const fileSymbols = { constants: new Set(), functions: new Set(), macros: new Set(), stats: [] };
 
+    // Helper to get documentation and annotations above a line
+    const getDocAbove = (lineIndex) => {
+        let docLines = [];
+        let annotations = [];
+        let j = lineIndex - 1;
+        while (j >= 0) {
+            const t = lines[j].trim();
+            if (t.startsWith('//')) {
+                docLines.push(t.replace(/^\/\/\s?/, ''));
+                j--;
+                continue;
+            }
+            if (t.startsWith('@')) {
+                // Capture annotations like @loop(3s) separately
+                annotations.push(t);
+                j--;
+                continue;
+            }
+            if (t === '') {
+                docLines.push('');
+                j--;
+                continue;
+            }
+            break;
+        }
+        docLines.reverse();
+        annotations.reverse();
+        return { doc: docLines.join('\n').trim(), annotations };
+    };
+
     for (let i = 0; i < lines.length; i++) {
         const raw = lines[i];
         const t = raw.trim();
@@ -848,24 +946,119 @@ function indexTextDocument(document) {
         let m = /^const\s+([A-Za-z_][A-Za-z0-9_]*)\b/.exec(t);
         if (m) {
             const name = m[1];
+            const charIndex = raw.indexOf(name);
+            const { doc, annotations } = getDocAbove(i);
+            const fullSignature = annotations.length > 0 ? annotations.join('\n') + '\n' + raw : raw;
             fileSymbols.constants.add(name);
-            workspaceIndex.constants.set(name, { uri: document.uri, line: i, character: raw.indexOf(name) });
+            workspaceIndex.constants.set(name, { 
+                uri: document.uri, 
+                line: i, 
+                character: charIndex,
+                signature: fullSignature,
+                doc
+            });
             continue;
         }
         // functions: fn name(
         m = /^fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(t);
         if (m) {
             const name = m[1];
+            const charIndex = raw.indexOf(name);
+            const { doc, annotations } = getDocAbove(i);
+            
+            // Collect multi-line signature until closing parenthesis
+            let signatureLines = [raw];
+            let k = i + 1;
+            let parenCount = (raw.match(/\(/g) || []).length - (raw.match(/\)/g) || []).length;
+            while (k < lines.length && parenCount > 0) {
+                signatureLines.push(lines[k]);
+                const s = lines[k];
+                parenCount += (s.match(/\(/g) || []).length - (s.match(/\)/g) || []).length;
+                k++;
+            }
+            const signature = signatureLines.join('\n');
+            const fullSignature = annotations.length > 0 ? annotations.join('\n') + '\n' + signature : signature;
+            
+            // Parse parameters
+            const openIdx = signature.indexOf('(');
+            const closeIdx = signature.lastIndexOf(')');
+            const params = [];
+            if (openIdx !== -1 && closeIdx !== -1 && closeIdx > openIdx) {
+                const paramStr = signature.slice(openIdx + 1, closeIdx);
+                const parts = splitTopLevel(paramStr, ',');
+                for (const rawParam of parts) {
+                    const p = rawParam.trim();
+                    if (!p) continue;
+                    const paramMatch = /^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^=]+?)(?:\s*=\s*(.+))?\s*$/.exec(p);
+                    if (paramMatch) {
+                        const pname = paramMatch[1].trim();
+                        const ptype = paramMatch[2].trim();
+                        const pdef = paramMatch[3] ? paramMatch[3].trim() : undefined;
+                        params.push({ name: pname, type: ptype, defaultValue: pdef });
+                    }
+                }
+            }
+            
             fileSymbols.functions.add(name);
-            workspaceIndex.functions.set(name, { uri: document.uri, line: i, character: raw.indexOf(name) });
+            workspaceIndex.functions.set(name, { 
+                uri: document.uri, 
+                line: i, 
+                character: charIndex,
+                signature: fullSignature,
+                doc,
+                params
+            });
             continue;
         }
         // macros: macro name(
         m = /^macro\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(t);
         if (m) {
             const name = m[1];
+            const charIndex = raw.indexOf(name);
+            const { doc, annotations } = getDocAbove(i);
+            
+            // Collect multi-line signature until closing parenthesis
+            let signatureLines = [raw];
+            let k = i + 1;
+            let parenCount = (raw.match(/\(/g) || []).length - (raw.match(/\)/g) || []).length;
+            while (k < lines.length && parenCount > 0) {
+                signatureLines.push(lines[k]);
+                const s = lines[k];
+                parenCount += (s.match(/\(/g) || []).length - (s.match(/\)/g) || []).length;
+                k++;
+            }
+            const signature = signatureLines.join('\n');
+            const fullSignature = annotations.length > 0 ? annotations.join('\n') + '\n' + signature : signature;
+            
+            // Parse parameters
+            const openIdx = signature.indexOf('(');
+            const closeIdx = signature.lastIndexOf(')');
+            const params = [];
+            if (openIdx !== -1 && closeIdx !== -1 && closeIdx > openIdx) {
+                const paramStr = signature.slice(openIdx + 1, closeIdx);
+                const parts = splitTopLevel(paramStr, ',');
+                for (const rawParam of parts) {
+                    const p = rawParam.trim();
+                    if (!p) continue;
+                    const paramMatch = /^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^=]+?)(?:\s*=\s*(.+))?\s*$/.exec(p);
+                    if (paramMatch) {
+                        const pname = paramMatch[1].trim();
+                        const ptype = paramMatch[2].trim();
+                        const pdef = paramMatch[3] ? paramMatch[3].trim() : undefined;
+                        params.push({ name: pname, type: ptype, defaultValue: pdef });
+                    }
+                }
+            }
+            
             fileSymbols.macros.add(name);
-            workspaceIndex.macros.set(name, { uri: document.uri, line: i, character: raw.indexOf(name) });
+            workspaceIndex.macros.set(name, { 
+                uri: document.uri, 
+                line: i, 
+                character: charIndex,
+                signature: fullSignature,
+                doc,
+                params
+            });
             continue;
         }
         // stats: stat <namespace> <name>
@@ -873,8 +1066,18 @@ function indexTextDocument(document) {
         if (m) {
             const ns = m[1];
             const name = m[2];
+            const charIndex = raw.indexOf(name);
+            const { doc, annotations } = getDocAbove(i);
+            const fullSignature = annotations.length > 0 ? annotations.join('\n') + '\n' + raw : raw;
             fileSymbols.stats.push({ namespace: ns, name });
-            workspaceIndex.stats.set(name, { uri: document.uri, line: i, character: raw.indexOf(name), namespace: ns });
+            workspaceIndex.stats.set(name, { 
+                uri: document.uri, 
+                line: i, 
+                character: charIndex, 
+                namespace: ns,
+                signature: fullSignature,
+                doc
+            });
             continue;
         }
     }
@@ -889,11 +1092,18 @@ function indexTypesInFile(filePath) {
     // Parse consecutive doc comments above declarations
     const getDocAbove = (lineIndex) => {
         let docLines = [];
+        let annotations = [];
         let j = lineIndex - 1;
         while (j >= 0) {
             const t = lines[j].trim();
             if (t.startsWith('//')) {
                 docLines.push(t.replace(/^\/\/\s?/, ''));
+                j--;
+                continue;
+            }
+            if (t.startsWith('@')) {
+                // Capture annotations like @loop(3s) separately
+                annotations.push(t);
                 j--;
                 continue;
             }
@@ -906,8 +1116,8 @@ function indexTypesInFile(filePath) {
             break;
         }
         docLines.reverse();
-        const result = docLines.join('\n').trim();
-        return result;
+        annotations.reverse();
+        return { doc: docLines.join('\n').trim(), annotations };
     };
 
     for (let i = 0; i < lines.length; i++) {
@@ -918,7 +1128,7 @@ function indexTypesInFile(filePath) {
             if (!m) continue;
             const enumName = m[1];
             const charIndex = raw.indexOf(enumName);
-            const doc = getDocAbove(i);
+            const { doc, annotations } = getDocAbove(i);
             if (enumName === 'Location') {
                 console.log(`[HSL] Location enum doc:`, JSON.stringify(doc));
             }
@@ -934,8 +1144,9 @@ function indexTypesInFile(filePath) {
                 k++;
             }
             const signature = sigLines.join('\n');
+            const fullSignature = annotations.length > 0 ? annotations.join('\n') + '\n' + signature : signature;
 
-            typesIndex[enumName] = { kind: 'enum', doc, signature, filePath, line: i, character: Math.max(0, charIndex) };
+            typesIndex[enumName] = { kind: 'enum', doc, signature: fullSignature, filePath, line: i, character: Math.max(0, charIndex) };
 
             // Parse enum members between first '{' and closing '}'
             enumMembersIndex[enumName] = enumMembersIndex[enumName] || {};
@@ -949,12 +1160,13 @@ function indexTypesInFile(filePath) {
                 const mm = /^([A-Za-z_][A-Za-z0-9_]*)\b/.exec(lt);
                 if (mm) {
                     const member = mm[1];
-                    const mdoc = getDocAbove(j);
+                    const { doc: mdoc, annotations } = getDocAbove(j);
                     const mchar = l.indexOf(member);
+                    const fullSignature = annotations.length > 0 ? annotations.join('\n') + '\n' + l : l;
                     if (enumName === 'Location' && member === 'Spawn') {
                         console.log(`[HSL] Location::Spawn doc:`, JSON.stringify(mdoc));
                     }
-                    enumMembersIndex[enumName][member] = { doc: mdoc, filePath, line: j, character: Math.max(0, mchar) };
+                    enumMembersIndex[enumName][member] = { doc: mdoc, signature: fullSignature, filePath, line: j, character: Math.max(0, mchar) };
                 }
                 j++;
             }
@@ -963,7 +1175,7 @@ function indexTypesInFile(filePath) {
             if (!m) continue;
             const structName = m[1];
             const charIndex = raw.indexOf(structName);
-            const doc = getDocAbove(i);
+            const { doc, annotations } = getDocAbove(i);
             // Capture signature possibly inline or multi-line
             let sigLines = [raw];
             let k = i + 1;
@@ -976,7 +1188,8 @@ function indexTypesInFile(filePath) {
                 k++;
             }
             const signature = sigLines.join('\n');
-            typesIndex[structName] = { kind: 'struct', doc, signature, filePath, line: i, character: Math.max(0, charIndex) };
+            const fullSignature = annotations.length > 0 ? annotations.join('\n') + '\n' + signature : signature;
+            typesIndex[structName] = { kind: 'struct', doc, signature: fullSignature, filePath, line: i, character: Math.max(0, charIndex) };
         }
     }
 }
