@@ -443,6 +443,24 @@ function activate(context) {
                     const targetPos = new vscode.Position(typeInfo.line, typeInfo.character || 0);
                     return new vscode.Location(uri, targetPos);
                 }
+
+                // workspace user symbols: constants, functions, macros, stats
+                if (workspaceIndex.constants.has(token)) {
+                    const loc = workspaceIndex.constants.get(token);
+                    return new vscode.Location(loc.uri, new vscode.Position(loc.line, loc.character || 0));
+                }
+                if (workspaceIndex.functions.has(token)) {
+                    const loc = workspaceIndex.functions.get(token);
+                    return new vscode.Location(loc.uri, new vscode.Position(loc.line, loc.character || 0));
+                }
+                if (workspaceIndex.macros.has(token)) {
+                    const loc = workspaceIndex.macros.get(token);
+                    return new vscode.Location(loc.uri, new vscode.Position(loc.line, loc.character || 0));
+                }
+                if (workspaceIndex.stats.has(token)) {
+                    const loc = workspaceIndex.stats.get(token);
+                    return new vscode.Location(loc.uri, new vscode.Position(loc.line, loc.character || 0));
+                }
                 return null;
             }
         })
@@ -625,11 +643,13 @@ function activate(context) {
                 for (const [fnName, loc] of workspaceIndex.functions) {
                     const ci = new vscode.CompletionItem(fnName, vscode.CompletionItemKind.Function);
                     ci.detail = 'function';
+                    ci.insertText = new vscode.SnippetString(`${fnName}($0)`);
                     items.push(ci);
                 }
                 for (const [macroName, loc] of workspaceIndex.macros) {
                     const ci = new vscode.CompletionItem(macroName, vscode.CompletionItemKind.Snippet);
                     ci.detail = 'macro';
+                    ci.insertText = new vscode.SnippetString(`${macroName}!($0)`);
                     items.push(ci);
                 }
                 for (const [statName, loc] of workspaceIndex.stats) {
