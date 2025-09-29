@@ -83,12 +83,27 @@ function getWordAtPosition(document, position) {
     return { text: document.getText(wordRange), range: wordRange };
 }
 
+// Extract possibly qualified token like Enum::Member
+function getPossiblyQualifiedToken(document, position) {
+    const range = document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
+    if (!range) return { fullToken: '', lhs: '', rhs: '' };
+    const start = new vscode.Position(range.start.line, Math.max(0, range.start.character - 2));
+    const end = new vscode.Position(range.end.line, range.end.character + 2);
+    const surrounding = document.getText(new vscode.Range(start, end));
+    const m = /([A-Za-z_][A-Za-z0-9_]*)\s*::\s*([A-Za-z_][A-Za-z0-9_]*)/.exec(surrounding);
+    if (m) return { fullToken: m[0], lhs: m[1], rhs: m[2] };
+    const word = document.getText(range);
+    return { fullToken: word, lhs: '', rhs: '' };
+}
+
 /** @type {vscode.Disposable[]} */
 let disposables = [];
 let actionsIndex = {};
 let actionsFilePath = '';
 let conditionsIndex = {};
 let conditionsFilePath = '';
+let typesIndex = {}; // name -> { kind, doc, signature, filePath, line, character }
+let enumMembersIndex = {}; // enumName -> memberName -> { doc, filePath, line, character }
 
 function activate(context) {
     // Prefer submodule std paths with fallback to legacy root files
@@ -122,6 +137,22 @@ function activate(context) {
         } catch (err) {
             console.error('[HSL] Failed to parse conditions.hsl:', err);
             conditionsIndex = {};
+        }
+
+        // Rebuild std types index (enums, structs, and enum members)
+        typesIndex = {};
+        enumMembersIndex = {};
+        const stdRoot = path.join('hsl-std', 'hypixel');
+        const stdAbs = context.asAbsolutePath(stdRoot);
+        if (fs.existsSync(stdAbs)) {
+            const files = listHslFiles(stdAbs);
+            for (const file of files) {
+                try {
+                    indexTypesInFile(file);
+                } catch (e) {
+                    console.warn('[HSL] Failed to index types in', file, e);
+                }
+            }
         }
     };
 
@@ -165,27 +196,74 @@ function activate(context) {
         console.warn('[HSL] conditions.hsl not found at extension root.');
     }
 
+    // Watch std directory for changes
+    const stdDir = context.asAbsolutePath(path.join('hsl-std', 'hypixel'));
+    if (fs.existsSync(stdDir)) {
+        try {
+            const watcherStd = fs.watch(stdDir, { persistent: false, recursive: true }, () => buildIndex());
+            context.subscriptions.push({ dispose: () => watcherStd.close() });
+        } catch (_) {
+            // Fallback: non-recursive watch, rebuild on top-level change
+            try {
+                const watcherStd2 = fs.watch(stdDir, { persistent: false }, () => buildIndex());
+                context.subscriptions.push({ dispose: () => watcherStd2.close() });
+            } catch (_) {}
+        }
+    }
+
     // Hover provider
     disposables.push(
         vscode.languages.registerHoverProvider('hsl-source', {
             provideHover(document, position) {
-                const { text: name } = getWordAtPosition(document, position);
-                const info = actionsIndex[name] || conditionsIndex[name];
-                if (!info) return null;
+                const { text: token } = getWordAtPosition(document, position);
+                const { fullToken, lhs, rhs } = getPossiblyQualifiedToken(document, position);
 
-                const md = new vscode.MarkdownString();
-                md.isTrusted = true;
-                const parts = [];
-                if (info.doc) {
-                    parts.push(info.doc);
+                // Prefer functions (actions/conditions)
+                let info = actionsIndex[token] || conditionsIndex[token];
+                if (info) {
+                    const md = new vscode.MarkdownString();
+                    md.isTrusted = true;
+                    const parts = [];
+                    if (info.doc) parts.push(info.doc);
+                    if (info.signature) {
+                        parts.push('```hsl');
+                        parts.push(info.signature);
+                        parts.push('```');
+                    }
+                    md.value = parts.join('\n');
+                    return new vscode.Hover(md);
                 }
-                if (info.signature) {
+
+                // Enum member hover like Location::Spawn
+                if (lhs && rhs && enumMembersIndex[lhs] && enumMembersIndex[lhs][rhs]) {
+                    const em = enumMembersIndex[lhs][rhs];
+                    const md = new vscode.MarkdownString();
+                    md.isTrusted = true;
+                    const parts = [];
+                    if (em.doc) parts.push(em.doc);
                     parts.push('```hsl');
-                    parts.push(info.signature);
+                    parts.push(`${lhs}::${rhs}`);
                     parts.push('```');
+                    md.value = parts.join('\n');
+                    return new vscode.Hover(md);
                 }
-                md.value = parts.join('\n');
-                return new vscode.Hover(md);
+
+                // Type hover for enums/structs
+                if (typesIndex[token]) {
+                    const t = typesIndex[token];
+                    const md = new vscode.MarkdownString();
+                    md.isTrusted = true;
+                    const parts = [];
+                    if (t.doc) parts.push(t.doc);
+                    if (t.signature) {
+                        parts.push('```hsl');
+                        parts.push(t.signature);
+                        parts.push('```');
+                    }
+                    md.value = parts.join('\n');
+                    return new vscode.Hover(md);
+                }
+                return null;
             }
         })
     );
@@ -194,14 +272,35 @@ function activate(context) {
     disposables.push(
         vscode.languages.registerDefinitionProvider('hsl-source', {
             provideDefinition(document, position) {
-                const { text: name } = getWordAtPosition(document, position);
-                const infoA = actionsIndex[name];
-                const infoC = conditionsIndex[name];
-                if (!infoA && !infoC) return null;
-                const info = infoA || infoC;
-                const uri = vscode.Uri.file(infoA ? actionsFilePath : conditionsFilePath);
-                const targetPos = new vscode.Position(info.line, info.character);
-                return new vscode.Location(uri, targetPos);
+                const { text: token } = getWordAtPosition(document, position);
+                const { lhs, rhs } = getPossiblyQualifiedToken(document, position);
+
+                // functions
+                const infoA = actionsIndex[token];
+                const infoC = conditionsIndex[token];
+                if (infoA || infoC) {
+                    const info = infoA || infoC;
+                    const uri = vscode.Uri.file(infoA ? actionsFilePath : conditionsFilePath);
+                    const targetPos = new vscode.Position(info.line, info.character);
+                    return new vscode.Location(uri, targetPos);
+                }
+
+                // enum member
+                if (lhs && rhs && enumMembersIndex[lhs] && enumMembersIndex[lhs][rhs]) {
+                    const em = enumMembersIndex[lhs][rhs];
+                    const uri = vscode.Uri.file(em.filePath);
+                    const targetPos = new vscode.Position(em.line, em.character || 0);
+                    return new vscode.Location(uri, targetPos);
+                }
+
+                // type
+                if (typesIndex[token]) {
+                    const t = typesIndex[token];
+                    const uri = vscode.Uri.file(t.filePath);
+                    const targetPos = new vscode.Position(t.line, t.character || 0);
+                    return new vscode.Location(uri, targetPos);
+                }
+                return null;
             }
         })
     );
@@ -220,3 +319,115 @@ module.exports = {
     activate,
     deactivate
 };
+
+// Helpers: scan filesystem for .hsl files and index enums/structs
+function listHslFiles(rootDir) {
+    /** @type {string[]} */
+    const results = [];
+    const stack = [rootDir];
+    while (stack.length) {
+        const dir = stack.pop();
+        if (!dir) continue;
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const e of entries) {
+            const abs = path.join(dir, e.name);
+            if (e.isDirectory()) {
+                stack.push(abs);
+            } else if (e.isFile() && e.name.endsWith('.hsl')) {
+                results.push(abs);
+            }
+        }
+    }
+    return results;
+}
+
+function indexTypesInFile(filePath) {
+    const content = fs.readFileSync(filePath, 'utf8');
+    const lines = content.split(/\r?\n/);
+
+    // Parse consecutive doc comments above declarations
+    const getDocAbove = (lineIndex) => {
+        let docLines = [];
+        let j = lineIndex - 1;
+        while (j >= 0) {
+            const t = lines[j].trim();
+            if (t.startsWith('//')) {
+                docLines.push(t.replace(/^\/\/\s?/, ''));
+                j--;
+                continue;
+            }
+            if (t === '') {
+                docLines.push('');
+                j--;
+                continue;
+            }
+            break;
+        }
+        docLines.reverse();
+        return docLines.join('\n').trim();
+    };
+
+    for (let i = 0; i < lines.length; i++) {
+        const raw = lines[i];
+        const t = raw.trim();
+        if (t.startsWith('enum ')) {
+            const m = /^enum\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(t);
+            if (!m) continue;
+            const enumName = m[1];
+            const charIndex = raw.indexOf(enumName);
+            const doc = getDocAbove(i);
+
+            // capture full enum signature line(s) until '{' and matching '}'
+            let sigLines = [raw];
+            let k = i + 1;
+            let brace = (raw.match(/\{/g) || []).length - (raw.match(/\}/g) || []).length;
+            while (k < lines.length && brace > 0) {
+                sigLines.push(lines[k]);
+                const s = lines[k];
+                brace += (s.match(/\{/g) || []).length - (s.match(/\}/g) || []).length;
+                k++;
+            }
+            const signature = sigLines.join('\n');
+
+            typesIndex[enumName] = { kind: 'enum', doc, signature, filePath, line: i, character: Math.max(0, charIndex) };
+
+            // Parse enum members between first '{' and closing '}'
+            enumMembersIndex[enumName] = enumMembersIndex[enumName] || {};
+            let j = i + 1;
+            while (j < lines.length) {
+                const l = lines[j];
+                const lt = l.trim();
+                if (lt.startsWith('}')) break;
+                if (lt.startsWith('//') || lt === '') { j++; continue; }
+                // Member like: Name, or Name(args)
+                const mm = /^([A-Za-z_][A-Za-z0-9_]*)\b/.exec(lt);
+                if (mm) {
+                    const member = mm[1];
+                    const mdoc = getDocAbove(j);
+                    const mchar = l.indexOf(member);
+                    enumMembersIndex[enumName][member] = { doc: mdoc, filePath, line: j, character: Math.max(0, mchar) };
+                }
+                j++;
+            }
+        } else if (t.startsWith('struct ')) {
+            const m = /^struct\s+([A-Za-z_][A-Za-z0-9_]*)(.*)$/.exec(t);
+            if (!m) continue;
+            const structName = m[1];
+            const charIndex = raw.indexOf(structName);
+            const doc = getDocAbove(i);
+            // Capture signature possibly inline or multi-line
+            let sigLines = [raw];
+            let k = i + 1;
+            // If struct has parentheses, collect until balanced or until '{...}' or end of line
+            let paren = (raw.match(/\(/g) || []).length - (raw.match(/\)/g) || []).length;
+            while (k < lines.length && (paren > 0)) {
+                sigLines.push(lines[k]);
+                const s = lines[k];
+                paren += (s.match(/\(/g) || []).length - (s.match(/\)/g) || []).length;
+                k++;
+            }
+            const signature = sigLines.join('\n');
+            typesIndex[structName] = { kind: 'struct', doc, signature, filePath, line: i, character: Math.max(0, charIndex) };
+        }
+    }
+}
