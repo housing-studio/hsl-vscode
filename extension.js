@@ -515,6 +515,7 @@ function activate(context) {
             provideCompletionItems(document, position) {
                 /** @type {vscode.CompletionItem[]} */
                 const items = [];
+                const currentWordRange = document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
 
                 // Language snippet completions
                 const eventTypes = [
@@ -624,6 +625,7 @@ function activate(context) {
                     if (info.signature) item.documentation = new vscode.MarkdownString('```hsl\n' + info.signature + '\n```');
                     // Insert only parentheses, let user request suggestions for args
                     item.insertText = new vscode.SnippetString(`${name}($0)`);
+                    if (currentWordRange) item.range = currentWordRange;
                     items.push(item);
                 }
                 for (const [name, info] of Object.entries(conditionsIndex)) {
@@ -631,6 +633,7 @@ function activate(context) {
                     item.detail = 'condition';
                     if (info.signature) item.documentation = new vscode.MarkdownString('```hsl\n' + info.signature + '\n```');
                     item.insertText = new vscode.SnippetString(`${name}($0)`);
+                    if (currentWordRange) item.range = currentWordRange;
                     items.push(item);
                 }
 
@@ -644,12 +647,14 @@ function activate(context) {
                     const ci = new vscode.CompletionItem(fnName, vscode.CompletionItemKind.Function);
                     ci.detail = 'function';
                     ci.insertText = new vscode.SnippetString(`${fnName}($0)`);
+                    if (currentWordRange) ci.range = currentWordRange;
                     items.push(ci);
                 }
                 for (const [macroName, loc] of workspaceIndex.macros) {
                     const ci = new vscode.CompletionItem(macroName, vscode.CompletionItemKind.Snippet);
                     ci.detail = 'macro';
                     ci.insertText = new vscode.SnippetString(`${macroName}!($0)`);
+                    if (currentWordRange) ci.range = currentWordRange;
                     items.push(ci);
                 }
                 for (const [statName, loc] of workspaceIndex.stats) {
