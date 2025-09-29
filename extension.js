@@ -39,6 +39,28 @@ function parseHslFile(filePath) {
             }
             const signature = signatureLines.join('\n');
 
+            // Parse parameters (name, type, default) from signature
+            const openIdx = signature.indexOf('(');
+            const closeIdx = signature.lastIndexOf(')');
+            /** @type {{name:string,type:string,defaultValue?:string}[]} */
+            const params = [];
+            if (openIdx !== -1 && closeIdx !== -1 && closeIdx > openIdx) {
+                const paramStr = signature.slice(openIdx + 1, closeIdx);
+                const parts = splitTopLevel(paramStr, ',');
+                for (const rawParam of parts) {
+                    const p = rawParam.trim();
+                    if (!p) continue;
+                    // pattern: name: Type (= default)?
+                    const m = /^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^=]+?)(?:\s*=\s*(.+))?\s*$/.exec(p);
+                    if (m) {
+                        const pname = m[1].trim();
+                        const ptype = m[2].trim();
+                        const pdef = m[3] ? m[3].trim() : undefined;
+                        params.push({ name: pname, type: ptype, defaultValue: pdef });
+                    }
+                }
+            }
+
             // Collect consecutive '//' doc comment lines immediately above
             let docLines = [];
             let j = i - 1;
@@ -65,6 +87,7 @@ function parseHslFile(filePath) {
             index[name] = {
                 doc,
                 signature,
+                params,
                 line: i,
                 character: Math.max(0, charIndex)
             };
@@ -72,6 +95,46 @@ function parseHslFile(filePath) {
     }
 
     return index;
+}
+
+// Split by a delimiter but ignore delimiters inside parentheses, angle brackets or quotes
+function splitTopLevel(input, delimiterChar) {
+    const result = [];
+    let current = '';
+    let depthPar = 0;
+    let depthAngle = 0;
+    let inString = false;
+    let stringChar = '';
+    for (let idx = 0; idx < input.length; idx++) {
+        const ch = input[idx];
+        const prev = idx > 0 ? input[idx - 1] : '';
+        if (inString) {
+            current += ch;
+            if (ch === stringChar && prev !== '\\') {
+                inString = false;
+                stringChar = '';
+            }
+            continue;
+        }
+        if (ch === '"' || ch === '\'') {
+            inString = true;
+            stringChar = ch;
+            current += ch;
+            continue;
+        }
+        if (ch === '(') { depthPar++; current += ch; continue; }
+        if (ch === ')') { depthPar = Math.max(0, depthPar - 1); current += ch; continue; }
+        if (ch === '<') { depthAngle++; current += ch; continue; }
+        if (ch === '>') { depthAngle = Math.max(0, depthAngle - 1); current += ch; continue; }
+        if (ch === delimiterChar && depthPar === 0 && depthAngle === 0) {
+            result.push(current);
+            current = '';
+            continue;
+        }
+        current += ch;
+    }
+    if (current.length > 0) result.push(current);
+    return result;
 }
 
 /**
@@ -347,6 +410,46 @@ function activate(context) {
         })
     );
 
+    // Inlay hints provider for parameter names at call sites
+    disposables.push(
+        vscode.languages.registerInlayHintsProvider('hsl-source', {
+            provideInlayHints(document, range, token) {
+                /** @type {vscode.InlayHint[]} */
+                const hints = [];
+                const start = range.start.line;
+                const end = range.end.line;
+                for (let lineNum = start; lineNum <= end; lineNum++) {
+                    const text = document.lineAt(lineNum).text;
+                    // Find simple call patterns: name(arg1, arg2, ...)
+                    const callRegex = /\b([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)/g;
+                    let m;
+                    while ((m = callRegex.exec(text)) !== null) {
+                        const fnName = m[1];
+                        const argsRaw = m[2];
+                        const info = actionsIndex[fnName] || conditionsIndex[fnName];
+                        if (!info || !info.params || info.params.length === 0) continue;
+                        const args = splitTopLevel(argsRaw, ',');
+                        let col = m.index + fnName.length + 1; // position after '('
+                        for (let i = 0; i < args.length && i < info.params.length; i++) {
+                            const argText = args[i];
+                            const p = info.params[i];
+                            // Skip if user already used named argument p.name=
+                            if (/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/.test(argText)) {
+                                col += argText.length + 1; // +1 for comma
+                                continue;
+                            }
+                            const hint = new vscode.InlayHint(`${p.name}:`, new vscode.Position(lineNum, col), vscode.InlayHintKind.Parameter);
+                            hint.paddingRight = true;
+                            hints.push(hint);
+                            col += argText.length + 1; // +1 for comma
+                        }
+                    }
+                }
+                return hints;
+            }
+        })
+    );
+
     // Completion provider for actions, conditions, types, and enum members
     disposables.push(
         vscode.languages.registerCompletionItemProvider('hsl-source', {
@@ -438,12 +541,29 @@ function activate(context) {
                     return items;
                 }
 
+                // Inside function call arguments: suggest named arguments 'paramName=' without suppressing other suggestions
+                const callCtx = getCallContext(document, position);
+                if (callCtx && (actionsIndex[callCtx.fnName] || conditionsIndex[callCtx.fnName])) {
+                    const info = actionsIndex[callCtx.fnName] || conditionsIndex[callCtx.fnName];
+                    if (info && info.params) {
+                        for (const p of info.params) {
+                            const ci = new vscode.CompletionItem(`${p.name}=`, vscode.CompletionItemKind.Field);
+                            ci.detail = 'named argument';
+                            const def = defaultValueForType(p.type, p.defaultValue);
+                            ci.insertText = new vscode.SnippetString(`${p.name}=${def}`);
+                            ci.sortText = '0_' + p.name; // promote above generic suggestions
+                            items.push(ci);
+                        }
+                        // do not return; allow normal suggestions to appear too
+                    }
+                }
+
                 // Actions and Conditions as function calls
                 for (const [name, info] of Object.entries(actionsIndex)) {
                     const item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Function);
                     item.detail = 'action';
                     if (info.signature) item.documentation = new vscode.MarkdownString('```hsl\n' + info.signature + '\n```');
-                    // Insert parentheses for functions
+                    // Insert only parentheses, let user request suggestions for args
                     item.insertText = new vscode.SnippetString(`${name}($0)`);
                     items.push(item);
                 }
@@ -483,7 +603,7 @@ function activate(context) {
 
                 return items;
             }
-        }, ':', ':') // trigger also on ':' to help with Enum::Member
+        }, ':', ':', '(', ',', '=') // trigger inside calls and qualified names
     );
 
     context.subscriptions.push(...disposables);
@@ -540,6 +660,25 @@ module.exports = {
 };
 
 // Helpers: scan filesystem for .hsl files and index enums/structs
+function defaultValueForType(typeText, explicitDefault) {
+    if (explicitDefault !== undefined) return explicitDefault;
+    const t = typeText.trim();
+    // simple kinds
+    if (/\bstring\b/i.test(t)) return '""';
+    if (/\b(int|u\d+|float|double)\b/i.test(t)) return '0';
+    if (/\bbool\b/i.test(t)) return 'false';
+    // enum reference like Time or Location
+    const enumMatch = /^([A-Z][A-Za-z0-9_]*)\b/.exec(t);
+    if (enumMatch && enumMembersIndex[enumMatch[1]]) {
+        const firstMember = Object.keys(enumMembersIndex[enumMatch[1]])[0];
+        if (firstMember) return `${enumMatch[1]}::${firstMember}`;
+    }
+    // struct with constructor-like notation Vector or Vector[] etc.
+    const structMatch = /^([A-Z][A-Za-z0-9_]*)\b/.exec(t);
+    if (structMatch) return structMatch[1];
+    return '';
+}
+
 function listHslFiles(rootDir) {
     /** @type {string[]} */
     const results = [];
@@ -558,6 +697,15 @@ function listHslFiles(rootDir) {
         }
     }
     return results;
+}
+
+// Lightweight parser to detect function call context: fnName(argCursorIndex)
+function getCallContext(document, position) {
+    const line = document.lineAt(position.line).text.slice(0, position.character);
+    // Find last identifier followed by '('
+    const m = /([A-Za-z_][A-Za-z0-9_]*)\s*\([^()]*$/.exec(line);
+    if (!m) return null;
+    return { fnName: m[1] };
 }
 
 function indexTypesInFile(filePath) {
