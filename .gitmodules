@@ -1,0 +1,3 @@
+[submodule "hsl-std"]
+	path = hsl-std
+	url = https://github.com/housing-studio/hsl-std

@@ -1,6 +1,7 @@
 const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
+const cp = require('child_process');
 
 /**
  * Parse an HSL definition file (e.g., actions.hsl, conditions.hsl) to build a map of
@@ -78,8 +79,24 @@ let conditionsIndex = {};
 let conditionsFilePath = '';
 
 function activate(context) {
-    actionsFilePath = context.asAbsolutePath('actions.hsl');
-    conditionsFilePath = context.asAbsolutePath('conditions.hsl');
+    // Prefer submodule std paths with fallback to legacy root files
+    const resolveStdPath = (relatives) => {
+        for (const rel of relatives) {
+            const abs = context.asAbsolutePath(rel);
+            if (fs.existsSync(abs)) return abs;
+        }
+        // return first as default even if missing to keep URI stable
+        return context.asAbsolutePath(relatives[0]);
+    };
+
+    actionsFilePath = resolveStdPath([
+        path.join('hsl-std', 'hypixel', 'actions.hsl'),
+        'actions.hsl'
+    ]);
+    conditionsFilePath = resolveStdPath([
+        path.join('hsl-std', 'hypixel', 'conditions.hsl'),
+        'conditions.hsl'
+    ]);
 
     const buildIndex = () => {
         try {
@@ -97,6 +114,30 @@ function activate(context) {
     };
 
     buildIndex();
+
+    // Attempt to auto-initialize submodules if std files are missing
+    let triedInit = false;
+    const stdPathsMissing = () => !fs.existsSync(actionsFilePath) || !fs.existsSync(conditionsFilePath);
+    const tryInitSubmodules = () => {
+        if (triedInit) return;
+        triedInit = true;
+        try {
+            const gitCmd = process.platform === 'win32' ? 'git.exe' : 'git';
+            const child = cp.spawn(gitCmd, ['submodule', 'update', '--init', '--recursive'], {
+                cwd: context.extensionPath,
+                stdio: 'ignore'
+            });
+            child.on('close', () => {
+                // Re-resolve paths and rebuild index after init attempt
+                buildIndex();
+            });
+        } catch (e) {
+            console.warn('[HSL] Failed to spawn git to initialize submodules:', e);
+        }
+    };
+    if (stdPathsMissing()) {
+        tryInitSubmodules();
+    }
 
     // Watch for changes to actions.hsl and conditions.hsl to refresh index
     if (fs.existsSync(actionsFilePath)) {
@@ -167,5 +208,3 @@ module.exports = {
     activate,
     deactivate
 };
-
-
