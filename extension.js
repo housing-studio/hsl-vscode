@@ -85,15 +85,30 @@ function getWordAtPosition(document, position) {
 
 // Extract possibly qualified token like Enum::Member
 function getPossiblyQualifiedToken(document, position) {
+    const lineText = document.lineAt(position.line).text;
+    const regex = /([A-Za-z_][A-Za-z0-9_]*)\s*::\s*([A-Za-z_][A-Za-z0-9_]*)/g;
+    let m;
+    while ((m = regex.exec(lineText)) !== null) {
+        const lhsStart = m.index;
+        const lhsEnd = lhsStart + m[1].length;
+        const sepStart = lhsEnd;
+        const rhsStart = m.index + m[0].lastIndexOf(m[2]);
+        const rhsEnd = rhsStart + m[2].length;
+        const ch = position.character;
+        if (ch >= rhsStart && ch <= rhsEnd) {
+            return { fullToken: m[0], lhs: m[1], rhs: m[2], inRhs: true, inLhs: false };
+        }
+        if (ch >= lhsStart && ch <= lhsEnd) {
+            return { fullToken: m[0], lhs: m[1], rhs: m[2], inRhs: false, inLhs: true };
+        }
+        if (ch > lhsEnd && ch < rhsEnd) {
+            return { fullToken: m[0], lhs: m[1], rhs: m[2], inRhs: true, inLhs: false };
+        }
+    }
     const range = document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
-    if (!range) return { fullToken: '', lhs: '', rhs: '' };
-    const start = new vscode.Position(range.start.line, Math.max(0, range.start.character - 2));
-    const end = new vscode.Position(range.end.line, range.end.character + 2);
-    const surrounding = document.getText(new vscode.Range(start, end));
-    const m = /([A-Za-z_][A-Za-z0-9_]*)\s*::\s*([A-Za-z_][A-Za-z0-9_]*)/.exec(surrounding);
-    if (m) return { fullToken: m[0], lhs: m[1], rhs: m[2] };
+    if (!range) return { fullToken: '', lhs: '', rhs: '', inRhs: false, inLhs: false };
     const word = document.getText(range);
-    return { fullToken: word, lhs: '', rhs: '' };
+    return { fullToken: word, lhs: '', rhs: '', inRhs: false, inLhs: false };
 }
 
 /** @type {vscode.Disposable[]} */
@@ -104,6 +119,9 @@ let conditionsIndex = {};
 let conditionsFilePath = '';
 let typesIndex = {}; // name -> { kind, doc, signature, filePath, line, character }
 let enumMembersIndex = {}; // enumName -> memberName -> { doc, filePath, line, character }
+
+// Cache for file modification times to avoid re-parsing unchanged files
+let fileCache = new Map(); // filePath -> { mtime, data }
 
 function activate(context) {
     // Prefer submodule std paths with fallback to legacy root files
@@ -126,20 +144,21 @@ function activate(context) {
     ]);
 
     const buildIndex = () => {
+        // Parse actions and conditions with caching
         try {
-            actionsIndex = fs.existsSync(actionsFilePath) ? parseHslFile(actionsFilePath) : {};
+            actionsIndex = fs.existsSync(actionsFilePath) ? parseHslFileCached(actionsFilePath) : {};
         } catch (err) {
             console.error('[HSL] Failed to parse actions.hsl:', err);
             actionsIndex = {};
         }
         try {
-            conditionsIndex = fs.existsSync(conditionsFilePath) ? parseHslFile(conditionsFilePath) : {};
+            conditionsIndex = fs.existsSync(conditionsFilePath) ? parseHslFileCached(conditionsFilePath) : {};
         } catch (err) {
             console.error('[HSL] Failed to parse conditions.hsl:', err);
             conditionsIndex = {};
         }
 
-        // Rebuild std types index (enums, structs, and enum members)
+        // Rebuild std types index (enums, structs, and enum members) with caching
         typesIndex = {};
         enumMembersIndex = {};
         const stdRoot = path.join('hsl-std', 'hypixel');
@@ -148,7 +167,7 @@ function activate(context) {
             const files = listHslFiles(stdAbs);
             for (const file of files) {
                 try {
-                    indexTypesInFile(file);
+                    indexTypesInFileCached(file);
                 } catch (e) {
                     console.warn('[HSL] Failed to index types in', file, e);
                 }
@@ -216,7 +235,7 @@ function activate(context) {
         vscode.languages.registerHoverProvider('hsl-source', {
             provideHover(document, position) {
                 const { text: token } = getWordAtPosition(document, position);
-                const { fullToken, lhs, rhs } = getPossiblyQualifiedToken(document, position);
+                const { fullToken, lhs, rhs, inRhs, inLhs } = getPossiblyQualifiedToken(document, position);
 
                 // Prefer functions (actions/conditions)
                 let info = actionsIndex[token] || conditionsIndex[token];
@@ -234,27 +253,45 @@ function activate(context) {
                     return new vscode.Hover(md);
                 }
 
-                // Enum member hover like Location::Spawn
-                if (lhs && rhs && enumMembersIndex[lhs] && enumMembersIndex[lhs][rhs]) {
-                    const em = enumMembersIndex[lhs][rhs];
-                    const md = new vscode.MarkdownString();
-                    md.isTrusted = true;
-                    const parts = [];
-                    if (em.doc) parts.push(em.doc);
-                    parts.push('```hsl');
-                    parts.push(`${lhs}::${rhs}`);
-                    parts.push('```');
-                    md.value = parts.join('\n');
-                    return new vscode.Hover(md);
+                // Qualified token handling: prefer member when hovering RHS, type when hovering LHS
+                if (lhs && rhs) {
+                    if (inRhs && enumMembersIndex[lhs] && enumMembersIndex[lhs][rhs]) {
+                        const em = enumMembersIndex[lhs][rhs];
+                        const md = new vscode.MarkdownString();
+                        md.isTrusted = true;
+                        const parts = [];
+                        if (em.doc) parts.push(em.doc);
+                        parts.push('```hsl');
+                        parts.push(`${lhs}::${rhs}`);
+                        parts.push('```');
+                        md.value = parts.join('\n');
+                        return new vscode.Hover(md);
+                    }
+                    if (inLhs && typesIndex[lhs]) {
+                        const t = typesIndex[lhs];
+                        const md = new vscode.MarkdownString();
+                        md.isTrusted = true;
+                        const parts = [];
+                        if (t.doc) parts.push(t.doc);
+                        if (t.signature) {
+                            parts.push('```hsl');
+                            parts.push(t.signature);
+                            parts.push('```');
+                        }
+                        md.value = parts.join('\n');
+                        return new vscode.Hover(md);
+                    }
                 }
 
-                // Type hover for enums/structs
+                // Type hover for enums/structs by bare token
                 if (typesIndex[token]) {
                     const t = typesIndex[token];
                     const md = new vscode.MarkdownString();
                     md.isTrusted = true;
                     const parts = [];
-                    if (t.doc) parts.push(t.doc);
+                    if (t.doc) {
+                        parts.push(t.doc);
+                    }
                     if (t.signature) {
                         parts.push('```hsl');
                         parts.push(t.signature);
@@ -273,7 +310,7 @@ function activate(context) {
         vscode.languages.registerDefinitionProvider('hsl-source', {
             provideDefinition(document, position) {
                 const { text: token } = getWordAtPosition(document, position);
-                const { lhs, rhs } = getPossiblyQualifiedToken(document, position);
+                const { lhs, rhs, inRhs, inLhs } = getPossiblyQualifiedToken(document, position);
 
                 // functions
                 const infoA = actionsIndex[token];
@@ -285,19 +322,19 @@ function activate(context) {
                     return new vscode.Location(uri, targetPos);
                 }
 
-                // enum member
-                if (lhs && rhs && enumMembersIndex[lhs] && enumMembersIndex[lhs][rhs]) {
+                // enum member (only when hovering RHS)
+                if (lhs && rhs && inRhs && enumMembersIndex[lhs] && enumMembersIndex[lhs][rhs]) {
                     const em = enumMembersIndex[lhs][rhs];
                     const uri = vscode.Uri.file(em.filePath);
                     const targetPos = new vscode.Position(em.line, em.character || 0);
                     return new vscode.Location(uri, targetPos);
                 }
 
-                // type
-                if (typesIndex[token]) {
-                    const t = typesIndex[token];
-                    const uri = vscode.Uri.file(t.filePath);
-                    const targetPos = new vscode.Position(t.line, t.character || 0);
+                // type (bare token or LHS of qualified)
+                if ((inLhs && lhs && typesIndex[lhs]) || typesIndex[token]) {
+                    const typeInfo = (inLhs && lhs && typesIndex[lhs]) ? typesIndex[lhs] : typesIndex[token];
+                    const uri = vscode.Uri.file(typeInfo.filePath);
+                    const targetPos = new vscode.Position(typeInfo.line, typeInfo.character || 0);
                     return new vscode.Location(uri, targetPos);
                 }
                 return null;
@@ -313,6 +350,44 @@ function deactivate() {
         try { d.dispose(); } catch (_) {}
     });
     disposables = [];
+}
+
+// Cached parsing functions
+function parseHslFileCached(filePath) {
+    const stats = fs.statSync(filePath);
+    const cached = fileCache.get(filePath);
+    if (cached && cached.mtime >= stats.mtimeMs) {
+        return cached.data;
+    }
+    const data = parseHslFile(filePath);
+    fileCache.set(filePath, { mtime: stats.mtimeMs, data });
+    return data;
+}
+
+function indexTypesInFileCached(filePath) {
+    const stats = fs.statSync(filePath);
+    const cached = fileCache.get(filePath + '.types');
+    if (cached && cached.mtime >= stats.mtimeMs) {
+        // Merge cached data
+        Object.assign(typesIndex, cached.data.types);
+        Object.assign(enumMembersIndex, cached.data.enumMembers);
+        return;
+    }
+    const oldTypes = { ...typesIndex };
+    const oldMembers = { ...enumMembersIndex };
+    indexTypesInFile(filePath);
+    const newTypes = {};
+    const newMembers = {};
+    for (const [k, v] of Object.entries(typesIndex)) {
+        if (!oldTypes[k]) newTypes[k] = v;
+    }
+    for (const [k, v] of Object.entries(enumMembersIndex)) {
+        if (!oldMembers[k]) newMembers[k] = v;
+    }
+    fileCache.set(filePath + '.types', { 
+        mtime: stats.mtimeMs, 
+        data: { types: newTypes, enumMembers: newMembers } 
+    });
 }
 
 module.exports = {
@@ -357,6 +432,7 @@ function indexTypesInFile(filePath) {
                 continue;
             }
             if (t === '') {
+                // Allow empty lines within comment blocks
                 docLines.push('');
                 j--;
                 continue;
@@ -364,7 +440,8 @@ function indexTypesInFile(filePath) {
             break;
         }
         docLines.reverse();
-        return docLines.join('\n').trim();
+        const result = docLines.join('\n').trim();
+        return result;
     };
 
     for (let i = 0; i < lines.length; i++) {
@@ -376,6 +453,9 @@ function indexTypesInFile(filePath) {
             const enumName = m[1];
             const charIndex = raw.indexOf(enumName);
             const doc = getDocAbove(i);
+            if (enumName === 'Location') {
+                console.log(`[HSL] Location enum doc:`, JSON.stringify(doc));
+            }
 
             // capture full enum signature line(s) until '{' and matching '}'
             let sigLines = [raw];
@@ -398,13 +478,16 @@ function indexTypesInFile(filePath) {
                 const l = lines[j];
                 const lt = l.trim();
                 if (lt.startsWith('}')) break;
-                if (lt.startsWith('//') || lt === '') { j++; continue; }
-                // Member like: Name, or Name(args)
+                
+                // Member like: Name, or Name(args) - but not comments or empty lines
                 const mm = /^([A-Za-z_][A-Za-z0-9_]*)\b/.exec(lt);
                 if (mm) {
                     const member = mm[1];
                     const mdoc = getDocAbove(j);
                     const mchar = l.indexOf(member);
+                    if (enumName === 'Location' && member === 'Spawn') {
+                        console.log(`[HSL] Location::Spawn doc:`, JSON.stringify(mdoc));
+                    }
                     enumMembersIndex[enumName][member] = { doc: mdoc, filePath, line: j, character: Math.max(0, mchar) };
                 }
                 j++;
