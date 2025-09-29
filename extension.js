@@ -395,6 +395,8 @@ function activate(context) {
                     if (t.kind === 'enum') {
                         // For enums, help user complete 'Enum::'
                         item.insertText = new vscode.SnippetString(`${name}::$0`);
+                        // After inserting Enum::, immediately trigger suggestions for members
+                        item.command = { command: 'editor.action.triggerSuggest', title: 'Trigger Suggest' };
                     }
                     items.push(item);
                 }
