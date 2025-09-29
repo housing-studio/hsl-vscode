@@ -825,6 +825,20 @@ function indexTextDocument(document) {
     const text = document.getText();
     const lines = text.split(/\r?\n/);
     const filePath = document.uri.fsPath;
+    // Remove old symbols from this file first
+    const prev = wsFileToSymbols.get(filePath);
+    if (prev) {
+        console.log(`[HSL] Re-indexing ${filePath}, removing old symbols:`, {
+            constants: prev.constants?.size || 0,
+            functions: prev.functions?.size || 0,
+            macros: prev.macros?.size || 0,
+            stats: prev.stats?.length || 0
+        });
+        if (prev.constants) for (const name of prev.constants) workspaceIndex.constants.delete(name);
+        if (prev.functions) for (const name of prev.functions) workspaceIndex.functions.delete(name);
+        if (prev.macros) for (const name of prev.macros) workspaceIndex.macros.delete(name);
+        if (prev.stats) for (const s of prev.stats) workspaceIndex.stats.delete(s.name);
+    }
     const fileSymbols = { constants: new Set(), functions: new Set(), macros: new Set(), stats: [] };
 
     for (let i = 0; i < lines.length; i++) {
