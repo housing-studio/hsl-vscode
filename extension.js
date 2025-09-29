@@ -91,8 +91,7 @@ function getPossiblyQualifiedToken(document, position) {
     while ((m = regex.exec(lineText)) !== null) {
         const lhsStart = m.index;
         const lhsEnd = lhsStart + m[1].length;
-        const sepStart = lhsEnd;
-        const rhsStart = m.index + m[0].lastIndexOf(m[2]);
+        const rhsStart = m.index + m[0].length - m[2].length;
         const rhsEnd = rhsStart + m[2].length;
         const ch = position.character;
         if (ch >= rhsStart && ch <= rhsEnd) {
@@ -102,8 +101,14 @@ function getPossiblyQualifiedToken(document, position) {
             return { fullToken: m[0], lhs: m[1], rhs: m[2], inRhs: false, inLhs: true };
         }
         if (ch > lhsEnd && ch < rhsEnd) {
+            // Hovering the '::' separator or spaces defaults to member context
             return { fullToken: m[0], lhs: m[1], rhs: m[2], inRhs: true, inLhs: false };
         }
+    }
+    // Detect pattern 'Enum::' with no member typed yet (cursor after ::)
+    const pending = /([A-Za-z_][A-Za-z0-9_]*)\s*::\s*$/.exec(lineText.slice(0, position.character));
+    if (pending) {
+        return { fullToken: pending[0], lhs: pending[1], rhs: '', inRhs: true, inLhs: false, pendingRhs: true };
     }
     const range = document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
     if (!range) return { fullToken: '', lhs: '', rhs: '', inRhs: false, inLhs: false };
@@ -349,17 +354,35 @@ function activate(context) {
                 /** @type {vscode.CompletionItem[]} */
                 const items = [];
 
+                const { lhs, rhs, pendingRhs } = getPossiblyQualifiedToken(document, position);
+
+                // If we're after 'Enum::', only suggest that enum's members
+                if ((pendingRhs || (lhs && rhs !== undefined)) && lhs && enumMembersIndex[lhs]) {
+                    for (const [memberName, em] of Object.entries(enumMembersIndex[lhs])) {
+                        const item = new vscode.CompletionItem(memberName, vscode.CompletionItemKind.EnumMember);
+                        item.detail = `${lhs} member`;
+                        if (em.doc) item.documentation = em.doc;
+                        // Insert just the member name when completing after 'Enum::'
+                        item.insertText = memberName;
+                        items.push(item);
+                    }
+                    return items;
+                }
+
                 // Actions and Conditions as function calls
                 for (const [name, info] of Object.entries(actionsIndex)) {
                     const item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Function);
                     item.detail = 'action';
                     if (info.signature) item.documentation = new vscode.MarkdownString('```hsl\n' + info.signature + '\n```');
+                    // Insert parentheses for functions
+                    item.insertText = new vscode.SnippetString(`${name}($0)`);
                     items.push(item);
                 }
                 for (const [name, info] of Object.entries(conditionsIndex)) {
                     const item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Function);
                     item.detail = 'condition';
                     if (info.signature) item.documentation = new vscode.MarkdownString('```hsl\n' + info.signature + '\n```');
+                    item.insertText = new vscode.SnippetString(`${name}($0)`);
                     items.push(item);
                 }
 
@@ -369,22 +392,27 @@ function activate(context) {
                     const item = new vscode.CompletionItem(name, kind);
                     item.detail = t.kind;
                     if (t.signature) item.documentation = new vscode.MarkdownString('```hsl\n' + t.signature + '\n```');
+                    if (t.kind === 'enum') {
+                        // For enums, help user complete 'Enum::'
+                        item.insertText = new vscode.SnippetString(`${name}::$0`);
+                    }
                     items.push(item);
                 }
 
-                // Enum members as qualified suggestions (Enum::Member)
+                // Enum members as qualified suggestions (Enum::Member) in general context
                 for (const [enumName, members] of Object.entries(enumMembersIndex)) {
                     for (const memberName of Object.keys(members)) {
                         const label = `${enumName}::${memberName}`;
                         const item = new vscode.CompletionItem(label, vscode.CompletionItemKind.EnumMember);
                         item.detail = 'enum member';
+                        item.insertText = label;
                         items.push(item);
                     }
                 }
 
                 return items;
             }
-        }, ':') // trigger also on ':' to help with Enum::Member
+        }, ':', ':') // trigger also on ':' to help with Enum::Member
     );
 
     context.subscriptions.push(...disposables);
