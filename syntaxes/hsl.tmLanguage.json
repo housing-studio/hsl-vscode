@@ -206,6 +206,10 @@
 						{
 							"name": "punctuation.separator.generic",
 							"match": ","
+						},
+						{
+							"name": "punctuation.separator.generic",
+							"match": ":"
 						}
 					]
 				}
@@ -247,6 +251,10 @@
 						{
 							"name": "punctuation.separator.generic",
 							"match": ","
+						},
+						{
+							"name": "punctuation.separator.generic",
+							"match": ":"
 						}
 					]
 				}
