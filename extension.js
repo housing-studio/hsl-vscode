@@ -354,6 +354,75 @@ function activate(context) {
                 /** @type {vscode.CompletionItem[]} */
                 const items = [];
 
+                // Language snippet completions
+                const eventTypes = [
+                    'join','quit','death','kill','respawn','groupChange','pvpStateChange','fishCaught','enterPortal','damage','blockBreak','startParkour','completeParkour','dropItem','pickUpItem','changeHeldItem','toggleSneak','toggleFlight'
+                ];
+                const namespaces = ['player','team','global'];
+
+                const mkSnippet = (label, snippet, detail) => {
+                    const ci = new vscode.CompletionItem(label, vscode.CompletionItemKind.Snippet);
+                    ci.detail = detail;
+                    ci.insertText = new vscode.SnippetString(snippet);
+                    return ci;
+                };
+
+                items.push(mkSnippet(
+                    'fn',
+                    'fn ${1:name}(${2}) {\n\t$0\n}',
+                    'function declaration'
+                ));
+                items.push(mkSnippet(
+                    'macro',
+                    'macro ${1:name}(${2:params}) {\n\t$0\n}',
+                    'macro declaration'
+                ));
+                const eventSnippet = 'event ' + '${1|' + eventTypes.join(',') + '|} {\n\t$0\n}';
+                items.push(mkSnippet(
+                    'event',
+                    eventSnippet,
+                    'event block'
+                ));
+                items.push(mkSnippet(
+                    'if',
+                    'if (${1:condition}) {\n\t$0\n}',
+                    'if statement'
+                ));
+                items.push(mkSnippet(
+                    'else',
+                    'else {\n\t$0\n}',
+                    'else block'
+                ));
+                items.push(mkSnippet(
+                    'return',
+                    'return ${1:value}',
+                    'return statement'
+                ));
+                const statSnippet = 'stat ' + '${1|' + namespaces.join(',') + '|} ' + '${2:varName}';
+                items.push(mkSnippet(
+                    'stat',
+                    statSnippet,
+                    'declare local variable (stat)'
+                ));
+
+                // Context-aware: if user typed 'event ' then suggest event types with block
+                const before = document.lineAt(position.line).text.slice(0, position.character);
+                const eventPrefix = /(^|\s)event\s+([A-Za-z_]*)$/;
+                const mEvent = eventPrefix.exec(before);
+                if (mEvent) {
+                    for (const et of eventTypes) {
+                        const ci = new vscode.CompletionItem(et, vscode.CompletionItemKind.EnumMember);
+                        ci.detail = 'event type';
+                        // Replace the partial after 'event '
+                        const startCol = before.lastIndexOf('event') + 'event'.length + 1;
+                        const replaceRange = new vscode.Range(position.line, startCol, position.line, position.character);
+                        ci.range = replaceRange;
+                        ci.insertText = new vscode.SnippetString(`${et} {\n\t$0\n}`);
+                        items.push(ci);
+                    }
+                    return items;
+                }
+
                 const { lhs, rhs, pendingRhs } = getPossiblyQualifiedToken(document, position);
 
                 // If we're after 'Enum::', only suggest that enum's members
