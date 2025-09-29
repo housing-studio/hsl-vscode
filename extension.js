@@ -19,13 +19,25 @@ function parseHslFile(filePath) {
         const trimmed = line.trim();
 
         if (trimmed.startsWith('fn ')) {
-            // Extract signature and name
-            const signature = trimmed; // keep as-is for hover
+            // Extract function name from first line
             const afterFn = trimmed.slice(3); // text after 'fn '
             const nameMatch = /([A-Za-z_][A-Za-z0-9_]*)/.exec(afterFn);
             if (!nameMatch) continue;
             const name = nameMatch[1];
             const charIndex = line.indexOf(name);
+
+            // Collect multi-line signature until closing parenthesis
+            let signatureLines = [line]; // use original line to preserve indentation
+            let k = i + 1;
+            let parenCount = (line.match(/\(/g) || []).length - (line.match(/\)/g) || []).length;
+            while (k < lines.length && parenCount > 0) {
+                const nextLine = lines[k];
+                if (nextLine.trim() === '') break; // stop at empty line
+                signatureLines.push(nextLine);
+                parenCount += (nextLine.match(/\(/g) || []).length - (nextLine.match(/\)/g) || []).length;
+                k++;
+            }
+            const signature = signatureLines.join('\n');
 
             // Collect consecutive '//' doc comment lines immediately above
             let docLines = [];
@@ -164,13 +176,13 @@ function activate(context) {
                 const md = new vscode.MarkdownString();
                 md.isTrusted = true;
                 const parts = [];
+                if (info.doc) {
+                    parts.push(info.doc);
+                }
                 if (info.signature) {
                     parts.push('```hsl');
                     parts.push(info.signature);
                     parts.push('```');
-                }
-                if (info.doc) {
-                    parts.push(info.doc);
                 }
                 md.value = parts.join('\n');
                 return new vscode.Hover(md);
