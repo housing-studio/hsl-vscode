@@ -3,14 +3,15 @@ const fs = require('fs');
 const path = require('path');
 
 /**
- * Parse the actions.hsl file to build a map of action name -> { doc, signature, line, character }
+ * Parse an HSL definition file (e.g., actions.hsl, conditions.hsl) to build a map of
+ * name -> { doc, signature, line, character }
  */
-function parseActionsFile(actionsFilePath) {
-    const fileContent = fs.readFileSync(actionsFilePath, 'utf8');
+function parseHslFile(filePath) {
+    const fileContent = fs.readFileSync(filePath, 'utf8');
     const lines = fileContent.split(/\r?\n/);
 
     /** @type {Record<string, {doc:string, signature:string, line:number, character:number}>} */
-    const actionsIndex = {};
+    const index = {};
 
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
@@ -22,8 +23,8 @@ function parseActionsFile(actionsFilePath) {
             const afterFn = trimmed.slice(3); // text after 'fn '
             const nameMatch = /([A-Za-z_][A-Za-z0-9_]*)/.exec(afterFn);
             if (!nameMatch) continue;
-            const actionName = nameMatch[1];
-            const charIndex = line.indexOf(actionName);
+            const name = nameMatch[1];
+            const charIndex = line.indexOf(name);
 
             // Collect consecutive '//' doc comment lines immediately above
             let docLines = [];
@@ -48,7 +49,7 @@ function parseActionsFile(actionsFilePath) {
             docLines.reverse();
             const doc = docLines.join('\n').trim();
 
-            actionsIndex[actionName] = {
+            index[name] = {
                 doc,
                 signature,
                 line: i,
@@ -57,7 +58,7 @@ function parseActionsFile(actionsFilePath) {
         }
     }
 
-    return actionsIndex;
+    return index;
 }
 
 /**
@@ -73,37 +74,50 @@ function getWordAtPosition(document, position) {
 let disposables = [];
 let actionsIndex = {};
 let actionsFilePath = '';
+let conditionsIndex = {};
+let conditionsFilePath = '';
 
 function activate(context) {
     actionsFilePath = context.asAbsolutePath('actions.hsl');
-    if (!fs.existsSync(actionsFilePath)) {
-        console.warn('[HSL] actions.hsl not found at extension root. Hover/definition for actions disabled.');
-        return;
-    }
+    conditionsFilePath = context.asAbsolutePath('conditions.hsl');
 
     const buildIndex = () => {
         try {
-            actionsIndex = parseActionsFile(actionsFilePath);
+            actionsIndex = fs.existsSync(actionsFilePath) ? parseHslFile(actionsFilePath) : {};
         } catch (err) {
             console.error('[HSL] Failed to parse actions.hsl:', err);
             actionsIndex = {};
+        }
+        try {
+            conditionsIndex = fs.existsSync(conditionsFilePath) ? parseHslFile(conditionsFilePath) : {};
+        } catch (err) {
+            console.error('[HSL] Failed to parse conditions.hsl:', err);
+            conditionsIndex = {};
         }
     };
 
     buildIndex();
 
-    // Watch for changes to actions.hsl to refresh index
-    const watcher = fs.watch(actionsFilePath, { persistent: false }, () => {
-        buildIndex();
-    });
-    context.subscriptions.push({ dispose: () => watcher.close() });
+    // Watch for changes to actions.hsl and conditions.hsl to refresh index
+    if (fs.existsSync(actionsFilePath)) {
+        const watcherA = fs.watch(actionsFilePath, { persistent: false }, () => buildIndex());
+        context.subscriptions.push({ dispose: () => watcherA.close() });
+    } else {
+        console.warn('[HSL] actions.hsl not found at extension root.');
+    }
+    if (fs.existsSync(conditionsFilePath)) {
+        const watcherC = fs.watch(conditionsFilePath, { persistent: false }, () => buildIndex());
+        context.subscriptions.push({ dispose: () => watcherC.close() });
+    } else {
+        console.warn('[HSL] conditions.hsl not found at extension root.');
+    }
 
     // Hover provider
     disposables.push(
         vscode.languages.registerHoverProvider('hsl-source', {
             provideHover(document, position) {
                 const { text: name } = getWordAtPosition(document, position);
-                const info = actionsIndex[name];
+                const info = actionsIndex[name] || conditionsIndex[name];
                 if (!info) return null;
 
                 const md = new vscode.MarkdownString();
@@ -128,9 +142,11 @@ function activate(context) {
         vscode.languages.registerDefinitionProvider('hsl-source', {
             provideDefinition(document, position) {
                 const { text: name } = getWordAtPosition(document, position);
-                const info = actionsIndex[name];
-                if (!info) return null;
-                const uri = vscode.Uri.file(actionsFilePath);
+                const infoA = actionsIndex[name];
+                const infoC = conditionsIndex[name];
+                if (!infoA && !infoC) return null;
+                const info = infoA || infoC;
+                const uri = vscode.Uri.file(infoA ? actionsFilePath : conditionsFilePath);
                 const targetPos = new vscode.Position(info.line, info.character);
                 return new vscode.Location(uri, targetPos);
             }
