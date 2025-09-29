@@ -342,6 +342,51 @@ function activate(context) {
         })
     );
 
+    // Completion provider for actions, conditions, types, and enum members
+    disposables.push(
+        vscode.languages.registerCompletionItemProvider('hsl-source', {
+            provideCompletionItems(document, position) {
+                /** @type {vscode.CompletionItem[]} */
+                const items = [];
+
+                // Actions and Conditions as function calls
+                for (const [name, info] of Object.entries(actionsIndex)) {
+                    const item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Function);
+                    item.detail = 'action';
+                    if (info.signature) item.documentation = new vscode.MarkdownString('```hsl\n' + info.signature + '\n```');
+                    items.push(item);
+                }
+                for (const [name, info] of Object.entries(conditionsIndex)) {
+                    const item = new vscode.CompletionItem(name, vscode.CompletionItemKind.Function);
+                    item.detail = 'condition';
+                    if (info.signature) item.documentation = new vscode.MarkdownString('```hsl\n' + info.signature + '\n```');
+                    items.push(item);
+                }
+
+                // Types (enums, structs)
+                for (const [name, t] of Object.entries(typesIndex)) {
+                    const kind = t.kind === 'enum' ? vscode.CompletionItemKind.Enum : vscode.CompletionItemKind.Struct;
+                    const item = new vscode.CompletionItem(name, kind);
+                    item.detail = t.kind;
+                    if (t.signature) item.documentation = new vscode.MarkdownString('```hsl\n' + t.signature + '\n```');
+                    items.push(item);
+                }
+
+                // Enum members as qualified suggestions (Enum::Member)
+                for (const [enumName, members] of Object.entries(enumMembersIndex)) {
+                    for (const memberName of Object.keys(members)) {
+                        const label = `${enumName}::${memberName}`;
+                        const item = new vscode.CompletionItem(label, vscode.CompletionItemKind.EnumMember);
+                        item.detail = 'enum member';
+                        items.push(item);
+                    }
+                }
+
+                return items;
+            }
+        }, ':') // trigger also on ':' to help with Enum::Member
+    );
+
     context.subscriptions.push(...disposables);
 }
 
