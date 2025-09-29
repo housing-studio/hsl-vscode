@@ -64,6 +64,10 @@
 				{
 					"name": "constant.character.escape.hsl",
 					"match": "\\\\."
+				},
+				{
+					"name": "constant.character.escape",
+					"match": "&[0-9a-fA-Fk-oK-OrR]"
 				}
 			]
 		},
@@ -79,6 +83,10 @@
 				{
 					"name": "string.quoted.format.constant.character.escape.hsl",
 					"match": "\\\\."
+				},
+				{
+					"name": "constant.character.escape",
+					"match": "&[0-9a-fA-Fk-oK-OrR]"
 				}
 			]
 		},
