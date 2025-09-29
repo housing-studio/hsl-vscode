@@ -187,6 +187,14 @@ let conditionsIndex = {};
 let conditionsFilePath = '';
 let typesIndex = {}; // name -> { kind, doc, signature, filePath, line, character }
 let enumMembersIndex = {}; // enumName -> memberName -> { doc, filePath, line, character }
+// Workspace symbol indexes
+let wsFileToSymbols = new Map(); // uri.fsPath -> { constants:Set<string>, functions:Set<string>, macros:Set<string>, stats:Array<{namespace:string,name:string}> }
+let workspaceIndex = {
+    constants: new Map(), // name -> { uri, line, character }
+    functions: new Map(),
+    macros: new Map(),
+    stats: new Map(), // name -> { uri, line, character, namespace }
+};
 
 // Cache for file modification times to avoid re-parsing unchanged files
 let fileCache = new Map(); // filePath -> { mtime, data }
@@ -297,6 +305,36 @@ function activate(context) {
             } catch (_) {}
         }
     }
+
+    // Workspace indexing for .hsl source files (excluding std)
+    const reindexWorkspace = async () => {
+        try {
+            wsFileToSymbols.clear();
+            workspaceIndex.constants.clear();
+            workspaceIndex.functions.clear();
+            workspaceIndex.macros.clear();
+            workspaceIndex.stats.clear();
+            const files = await vscode.workspace.findFiles('**/*.hsl', '{**/hsl-std/**,**/.git/**,**/node_modules/**}', 5000);
+            for (const uri of files) {
+                await indexDocumentUri(uri);
+            }
+        } catch (e) {
+            console.warn('[HSL] Workspace reindex failed:', e);
+        }
+    };
+    reindexWorkspace();
+
+    const fsWatcher = vscode.workspace.createFileSystemWatcher('**/*.hsl');
+    fsWatcher.onDidCreate(uri => indexDocumentUri(uri));
+    fsWatcher.onDidChange(uri => indexDocumentUri(uri));
+    fsWatcher.onDidDelete(uri => removeDocumentUri(uri));
+    context.subscriptions.push(fsWatcher);
+
+    context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(e => {
+        if (e.document && e.document.languageId === 'hsl-source') {
+            indexTextDocument(e.document);
+        }
+    }));
 
     // Hover provider
     disposables.push(
@@ -429,19 +467,22 @@ function activate(context) {
                         const info = actionsIndex[fnName] || conditionsIndex[fnName];
                         if (!info || !info.params || info.params.length === 0) continue;
                         const args = splitTopLevel(argsRaw, ',');
-                        let col = m.index + fnName.length + 1; // position after '('
+                        const openIdx = text.indexOf('(', m.index);
+                        let consumed = 0;
                         for (let i = 0; i < args.length && i < info.params.length; i++) {
                             const argText = args[i];
                             const p = info.params[i];
                             // Skip if user already used named argument p.name=
                             if (/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/.test(argText)) {
-                                col += argText.length + 1; // +1 for comma
+                                consumed += argText.length + 1; // +1 for comma
                                 continue;
                             }
-                            const hint = new vscode.InlayHint(`${p.name}:`, new vscode.Position(lineNum, col), vscode.InlayHintKind.Parameter);
+                            const leadingSpaces = (/^\s*/.exec(argText) || [''])[0].length;
+                            const argStartCol = openIdx + 1 + consumed + leadingSpaces;
+                            const hint = new vscode.InlayHint(`${p.name}:`, new vscode.Position(lineNum, argStartCol), vscode.InlayHintKind.Parameter);
                             hint.paddingRight = true;
                             hints.push(hint);
-                            col += argText.length + 1; // +1 for comma
+                            consumed += argText.length + 1; // +1 for comma
                         }
                     }
                 }
@@ -575,6 +616,28 @@ function activate(context) {
                     items.push(item);
                 }
 
+                // Workspace symbols: constants, functions, macros, stats
+                for (const [constName, loc] of workspaceIndex.constants) {
+                    const ci = new vscode.CompletionItem(constName, vscode.CompletionItemKind.Constant);
+                    ci.detail = 'constant';
+                    items.push(ci);
+                }
+                for (const [fnName, loc] of workspaceIndex.functions) {
+                    const ci = new vscode.CompletionItem(fnName, vscode.CompletionItemKind.Function);
+                    ci.detail = 'function';
+                    items.push(ci);
+                }
+                for (const [macroName, loc] of workspaceIndex.macros) {
+                    const ci = new vscode.CompletionItem(macroName, vscode.CompletionItemKind.Snippet);
+                    ci.detail = 'macro';
+                    items.push(ci);
+                }
+                for (const [statName, loc] of workspaceIndex.stats) {
+                    const ci = new vscode.CompletionItem(statName, vscode.CompletionItemKind.Variable);
+                    ci.detail = `stat (${loc.namespace})`;
+                    items.push(ci);
+                }
+
                 // Types (enums, structs)
                 for (const [name, t] of Object.entries(typesIndex)) {
                     const kind = t.kind === 'enum' ? vscode.CompletionItemKind.Enum : vscode.CompletionItemKind.Struct;
@@ -706,6 +769,78 @@ function getCallContext(document, position) {
     const m = /([A-Za-z_][A-Za-z0-9_]*)\s*\([^()]*$/.exec(line);
     if (!m) return null;
     return { fnName: m[1] };
+}
+
+async function indexDocumentUri(uri) {
+    try {
+        const doc = await vscode.workspace.openTextDocument(uri);
+        indexTextDocument(doc);
+    } catch (e) {
+        // ignore
+    }
+}
+
+function removeDocumentUri(uri) {
+    const path = uri.fsPath;
+    const prev = wsFileToSymbols.get(path);
+    if (!prev) return;
+    // remove symbols from global maps
+    if (prev.constants) for (const name of prev.constants) workspaceIndex.constants.delete(name);
+    if (prev.functions) for (const name of prev.functions) workspaceIndex.functions.delete(name);
+    if (prev.macros) for (const name of prev.macros) workspaceIndex.macros.delete(name);
+    if (prev.stats) for (const s of prev.stats) workspaceIndex.stats.delete(s.name);
+    wsFileToSymbols.delete(path);
+}
+
+function indexTextDocument(document) {
+    if (!document || document.languageId !== 'hsl-source') return;
+    // Skip std files
+    if (document.uri.fsPath.includes(`${path.sep}hsl-std${path.sep}`)) return;
+
+    const text = document.getText();
+    const lines = text.split(/\r?\n/);
+    const filePath = document.uri.fsPath;
+    const fileSymbols = { constants: new Set(), functions: new Set(), macros: new Set(), stats: [] };
+
+    for (let i = 0; i < lines.length; i++) {
+        const raw = lines[i];
+        const t = raw.trim();
+        // constants: const NAME = ...
+        let m = /^const\s+([A-Za-z_][A-Za-z0-9_]*)\b/.exec(t);
+        if (m) {
+            const name = m[1];
+            fileSymbols.constants.add(name);
+            workspaceIndex.constants.set(name, { uri: document.uri, line: i, character: raw.indexOf(name) });
+            continue;
+        }
+        // functions: fn name(
+        m = /^fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(t);
+        if (m) {
+            const name = m[1];
+            fileSymbols.functions.add(name);
+            workspaceIndex.functions.set(name, { uri: document.uri, line: i, character: raw.indexOf(name) });
+            continue;
+        }
+        // macros: macro name(
+        m = /^macro\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(t);
+        if (m) {
+            const name = m[1];
+            fileSymbols.macros.add(name);
+            workspaceIndex.macros.set(name, { uri: document.uri, line: i, character: raw.indexOf(name) });
+            continue;
+        }
+        // stats: stat <namespace> <name>
+        m = /^stat\s+(player|team|global)\s+([A-Za-z_][A-Za-z0-9_]*)\b/.exec(t);
+        if (m) {
+            const ns = m[1];
+            const name = m[2];
+            fileSymbols.stats.push({ namespace: ns, name });
+            workspaceIndex.stats.set(name, { uri: document.uri, line: i, character: raw.indexOf(name), namespace: ns });
+            continue;
+        }
+    }
+
+    wsFileToSymbols.set(filePath, fileSymbols);
 }
 
 function indexTypesInFile(filePath) {
