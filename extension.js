@@ -1039,7 +1039,7 @@ function indexTextDocument(document) {
             const name = m[1];
             const charIndex = raw.indexOf(name);
             const { doc, annotations } = getDocAbove(i);
-            const fullSignature = annotations.length > 0 ? annotations.join('\n') + '\n' + raw : raw;
+            const fullSignature = (annotations.length > 0 ? annotations.join('\n') + '\n' + raw : raw).trim();
             fileSymbols.constants.add(name);
             workspaceIndex.constants.set(name, { 
                 uri: document.uri, 
@@ -1068,7 +1068,7 @@ function indexTextDocument(document) {
                 k++;
             }
             const signature = signatureLines.join('\n');
-            const fullSignature = annotations.length > 0 ? annotations.join('\n') + '\n' + signature : signature;
+            const fullSignature = (annotations.length > 0 ? annotations.join('\n') + '\n' + signature : signature).trim();
             
             // Parse parameters
             const openIdx = signature.indexOf('(');
@@ -1119,7 +1119,7 @@ function indexTextDocument(document) {
                 k++;
             }
             const signature = signatureLines.join('\n');
-            const fullSignature = annotations.length > 0 ? annotations.join('\n') + '\n' + signature : signature;
+            const fullSignature = (annotations.length > 0 ? annotations.join('\n') + '\n' + signature : signature).trim();
             
             // Parse parameters
             const openIdx = signature.indexOf('(');
@@ -1159,7 +1159,7 @@ function indexTextDocument(document) {
             const name = m[2];
             const charIndex = raw.indexOf(name);
             const { doc, annotations } = getDocAbove(i);
-            const fullSignature = annotations.length > 0 ? annotations.join('\n') + '\n' + raw : raw;
+            const fullSignature = (annotations.length > 0 ? annotations.join('\n') + '\n' + raw : raw).trim();
             fileSymbols.stats.push({ namespace: ns, name });
             workspaceIndex.stats.set(name, { 
                 uri: document.uri, 
