@@ -929,16 +929,29 @@ async function checkDocumentForErrors(document) {
         if (diagnosticCollection) {
             const vscodeDiagnostics = diagnostics.map(diag => {
                 console.log('[HSL Extension] Converting diagnostic:', diag);
-                return new vscode.Diagnostic(
+                const diagnostic = new vscode.Diagnostic(
                     new vscode.Range(
                         diag.range.start.line,
                         diag.range.start.character,
                         diag.range.end.line,
                         diag.range.end.character
                     ),
-                    diag.message,
+                    diag.message, // Primary message without notes
                     diag.severity === 1 ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning
                 );
+                
+                // Add full message with notes for hover
+                if (diag.fullMessage && diag.fullMessage !== diag.message) {
+                    diagnostic.relatedInformation = [{
+                        message: diag.fullMessage,
+                        location: {
+                            uri: document.uri,
+                            range: diagnostic.range
+                        }
+                    }];
+                }
+                
+                return diagnostic;
             });
             
             // Only show real diagnostics, no test diagnostic

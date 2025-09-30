@@ -223,7 +223,8 @@ version = "1.0.0"
                         start: { line: 0, character: 0 },
                         end: { line: 0, character: 0 }
                     },
-                    message: errorMatch[2],
+                    message: errorMatch[2], // Primary message without notes
+                    fullMessage: errorMatch[2], // Will be updated with notes for hover
                     source: 'HSL Compiler',
                     code: errorMatch[1]
                 };
@@ -239,6 +240,8 @@ version = "1.0.0"
                 if (fileName.includes(path.basename(filePath))) {
                     errorLine = parseInt(lineNum) - 1; // Convert to 0-based
                     errorColumn = parseInt(colNum) - 1; // Convert to 0-based
+                    // Store the column for later use with ^ pointer
+                    currentError.startColumn = errorColumn;
                     currentError.range = {
                         start: { line: errorLine, character: errorColumn },
                         end: { line: errorLine, character: errorColumn + 1 }
@@ -271,7 +274,7 @@ version = "1.0.0"
             // Look for note patterns
             const noteMatch = cleanTrimmed.match(/note:\s*(.+)/);
             if (noteMatch && currentError) {
-                currentError.message += `\nNote: ${noteMatch[1]}`;
+                currentError.fullMessage += `\nNote: ${noteMatch[1]}`;
                 continue;
             }
 
@@ -280,10 +283,13 @@ version = "1.0.0"
                 // The error is pointing to a specific character
                 const caretIndex = cleanLine.indexOf('^');
                 if (caretIndex > 0) {
+                    // Count the number of ^ characters to determine token length
+                    const caretCount = (cleanLine.match(/\^/g) || []).length;
                     currentError.range = {
                         start: { line: errorLine, character: caretIndex },
-                        end: { line: errorLine, character: caretIndex + 1 }
+                        end: { line: errorLine, character: caretIndex + caretCount }
                     };
+                    console.log('[HSL Language Server] Updated error range with caret:', currentError.range);
                 }
             }
         }
