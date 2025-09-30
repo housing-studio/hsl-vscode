@@ -1,0 +1,31 @@
+// Test HSL file with intentional errors for language server testing
+
+fn testFunction() {
+    // This should work fine
+    chat("Hello, world!")
+    
+    // This should cause an error - unknown variable
+    unknownVariable = 42
+    
+    // This should cause an error - unknown function
+    unknownFunction()
+    
+    // This should cause an error - invalid syntax
+    if (true {
+        chat("Missing closing parenthesis")
+    }
+    
+    // This should work - valid stat declaration
+    stat player testCounter: int
+    testCounter = 5
+}
+
+// This should cause an error - missing opening brace
+fn brokenFunction()
+    chat("This function is missing its opening brace")
+}
+
+// This should cause an error - invalid event type
+event invalidEvent {
+    chat("This event type doesn't exist")
+}

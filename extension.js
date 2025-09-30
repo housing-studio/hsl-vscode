@@ -2,6 +2,7 @@ const vscode = require('vscode');
 const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
+const HSLanguageServer = require('./server');
 
 /**
  * Parse an HSL definition file (e.g., actions.hsl, conditions.hsl) to build a map of
@@ -209,7 +210,24 @@ let workspaceIndex = {
 // Cache for file modification times to avoid re-parsing unchanged files
 let fileCache = new Map(); // filePath -> { mtime, data }
 
+// Language server instance
+let languageServer = null;
+let diagnosticCollection = null;
+
 function activate(context) {
+    console.log('[HSL Extension] Activating HSL extension...');
+    
+    // Initialize language server
+    languageServer = new HSLanguageServer();
+    diagnosticCollection = vscode.languages.createDiagnosticCollection('hsl');
+    context.subscriptions.push(diagnosticCollection);
+
+    // Initialize language server with workspace root
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri?.fsPath;
+    if (workspaceRoot) {
+        languageServer.initialize(workspaceRoot);
+    }
+
     // Prefer submodule std paths with fallback to legacy root files
     const resolveStdPath = (relatives) => {
         for (const rel of relatives) {
@@ -343,8 +361,13 @@ function activate(context) {
     context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(e => {
         if (e.document && e.document.languageId === 'hsl-source') {
             indexTextDocument(e.document);
+            // Check for errors when document changes
+            checkDocumentForErrors(e.document);
         }
     }));
+
+    // Note: VSCode doesn't have a registerDiagnosticProvider function
+    // We'll use the diagnostic collection directly instead
 
     // Hover provider
     disposables.push(
@@ -860,6 +883,20 @@ function activate(context) {
         }, ':', ':', '(', ',', '=', ']') // trigger inside calls and qualified names and after slice
     );
 
+    // Add command to manually check current document
+    console.log('[HSL Extension] Registering command: hsl.checkDocument');
+    const checkDocumentCommand = vscode.commands.registerCommand('hsl.checkDocument', async () => {
+        console.log('[HSL Extension] Command hsl.checkDocument executed');
+        const editor = vscode.window.activeTextEditor;
+        if (editor && editor.document.languageId === 'hsl-source') {
+            await checkDocumentForErrors(editor.document);
+            vscode.window.showInformationMessage('HSL document checked for errors');
+        } else {
+            vscode.window.showWarningMessage('Please open an HSL file to check for errors');
+        }
+    });
+    disposables.push(checkDocumentCommand);
+
     context.subscriptions.push(...disposables);
 }
 
@@ -868,6 +905,52 @@ function deactivate() {
         try { d.dispose(); } catch (_) {}
     });
     disposables = [];
+    
+    if (diagnosticCollection) {
+        diagnosticCollection.dispose();
+    }
+}
+
+// Function to check document for errors using the language server
+async function checkDocumentForErrors(document) {
+    if (!languageServer || !document || document.languageId !== 'hsl-source') {
+        return;
+    }
+
+    try {
+        const uri = document.uri.toString();
+        const content = document.getText();
+        
+        // Check for errors asynchronously
+        const diagnostics = await languageServer.checkFile(uri, content);
+        console.log('[HSL Extension] Raw diagnostics from language server:', diagnostics);
+        
+        // Update diagnostics collection
+        if (diagnosticCollection) {
+            const vscodeDiagnostics = diagnostics.map(diag => {
+                console.log('[HSL Extension] Converting diagnostic:', diag);
+                return new vscode.Diagnostic(
+                    new vscode.Range(
+                        diag.range.start.line,
+                        diag.range.start.character,
+                        diag.range.end.line,
+                        diag.range.end.character
+                    ),
+                    diag.message,
+                    diag.severity === 1 ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning
+                );
+            });
+            
+            // Only show real diagnostics, no test diagnostic
+            
+            console.log('[HSL Extension] Setting diagnostics for', document.uri.toString(), ':', vscodeDiagnostics.length, 'diagnostics');
+            diagnosticCollection.set(document.uri, vscodeDiagnostics);
+        } else {
+            console.log('[HSL Extension] No diagnostic collection available');
+        }
+    } catch (error) {
+        console.error('[HSL Extension] Error checking document:', error);
+    }
 }
 
 // Cached parsing functions
@@ -1060,7 +1143,7 @@ function removeDocumentUri(uri) {
     if (prev.stats) for (const s of prev.stats) {
         const arr = workspaceIndex.stats.get(s.name);
         if (arr) {
-            workspaceIndex.stats.set(s.name, arr.filter(x => x.uri.fsPath !== document.uri.fsPath || x.line !== s.line));
+            workspaceIndex.stats.set(s.name, arr.filter(x => x.uri.fsPath !== uri.fsPath || x.line !== s.line));
             if (workspaceIndex.stats.get(s.name)?.length === 0) workspaceIndex.stats.delete(s.name);
         }
     }
@@ -1393,3 +1476,8 @@ function indexTypesInFile(filePath) {
         }
     }
 }
+
+module.exports = {
+    activate,
+    deactivate
+};

@@ -33,7 +33,29 @@
         "scopeName": "source.hsl",
         "path": "./syntaxes/hsl.tmLanguage.json"
       }
-    ]
+    ],
+    "commands": [
+      {
+        "command": "hsl.checkDocument",
+        "title": "Check HSL Document for Errors",
+        "category": "HSL"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "hsl.checkDocument",
+          "when": "resourceExtname == .hsl"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "hsl.checkDocument",
+          "when": "resourceExtname == .hsl",
+          "group": "HSL"
+        }
+      ]
+    }
   },
   "main": "./extension.js",
   "activationEvents": [
@@ -47,6 +69,9 @@
   },
   "devDependencies": {
     "@types/vscode": "^1.76.0"
+  },
+  "dependencies": {
+    "glob": "^8.1.0"
   },
   "publisher": "hypixel-studio"
 }
