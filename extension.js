@@ -656,6 +656,45 @@ function activate(context) {
 
                 const { lhs, rhs, pendingRhs } = getPossiblyQualifiedToken(document, position);
 
+                // If immediately after a slice specifier '[]', suggest only types (like Go: []int)
+                {
+                    const lineTextBefore = before; // already computed above
+                    const sliceMatch = /\[\]\s*([A-Za-z_]*)$/.exec(lineTextBefore);
+                    if (sliceMatch) {
+                        const partial = sliceMatch[1] || '';
+                        // Compute replace range starting after the '[]' and any spaces
+                        const afterBracketIdx = lineTextBefore.lastIndexOf(']') + 1;
+                        const spacesMatch = /^\s*/.exec(lineTextBefore.slice(afterBracketIdx)) || [''];
+                        const startCol = afterBracketIdx + spacesMatch[0].length;
+                        const replaceRange = new vscode.Range(position.line, startCol, position.line, position.character);
+
+                        // Builtin element types
+                        const builtinElemTypes = ['void','int','float','string','bool','any'];
+                        for (const t of builtinElemTypes) {
+                            const ci = new vscode.CompletionItem(t, vscode.CompletionItemKind.Keyword);
+                            ci.detail = 'builtin type';
+                            ci.range = replaceRange;
+                            // Promote types in this context
+                            ci.sortText = '0_' + t;
+                            items.push(ci);
+                        }
+
+                        // Declared types (enums, structs) - insert just the type name
+                        for (const [name, t] of Object.entries(typesIndex)) {
+                            const kind = t.kind === 'enum' ? vscode.CompletionItemKind.Enum : vscode.CompletionItemKind.Struct;
+                            const item = new vscode.CompletionItem(name, kind);
+                            item.detail = t.kind;
+                            if (t.signature) item.documentation = new vscode.MarkdownString('```hsl\n' + t.signature + '\n```');
+                            item.insertText = name;
+                            item.range = replaceRange;
+                            item.sortText = '0_' + name;
+                            items.push(item);
+                        }
+
+                        return items;
+                    }
+                }
+
                 // If we're after 'Enum::', only suggest that enum's members
                 if ((pendingRhs || (lhs && rhs !== undefined)) && lhs && enumMembersIndex[lhs]) {
                     for (const [memberName, em] of Object.entries(enumMembersIndex[lhs])) {
@@ -757,9 +796,26 @@ function activate(context) {
                     }
                 }
 
+                // Builtin types and values
+                const builtinTypes = ['void', 'int', 'float', 'string', 'bool', 'any', '[]'];
+                for (const t of builtinTypes) {
+                    const kind = t === '[]' ? vscode.CompletionItemKind.Snippet : vscode.CompletionItemKind.Keyword;
+                    const ci = new vscode.CompletionItem(t, kind);
+                    ci.detail = 'builtin type';
+                    if (t === '[]') {
+                        ci.insertText = new vscode.SnippetString('[]');
+                    }
+                    if (currentWordRange) ci.range = currentWordRange;
+                    items.push(ci);
+                }
+                const nilItem = new vscode.CompletionItem('nil', vscode.CompletionItemKind.Keyword);
+                nilItem.detail = 'builtin value';
+                if (currentWordRange) nilItem.range = currentWordRange;
+                items.push(nilItem);
+
                 return items;
             }
-        }, ':', ':', '(', ',', '=') // trigger inside calls and qualified names
+        }, ':', ':', '(', ',', '=', ']') // trigger inside calls and qualified names and after slice
     );
 
     context.subscriptions.push(...disposables);
