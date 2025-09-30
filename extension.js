@@ -198,12 +198,12 @@ let conditionsFilePath = '';
 let typesIndex = {}; // name -> { kind, doc, signature, filePath, line, character }
 let enumMembersIndex = {}; // enumName -> memberName -> { doc, filePath, line, character }
 // Workspace symbol indexes
-let wsFileToSymbols = new Map(); // uri.fsPath -> { constants:Set<string>, functions:Set<string>, macros:Set<string>, stats:Array<{namespace:string,name:string}> }
+let wsFileToSymbols = new Map(); // uri.fsPath -> { constants:Set<string>, functions:Set<string>, macros:Set<string>, stats:Array<{namespace:string,name:string,line:number,uri:vscode.Uri}> }
 let workspaceIndex = {
     constants: new Map(), // name -> { uri, line, character, signature, doc }
     functions: new Map(), // name -> { uri, line, character, signature, doc, params }
     macros: new Map(), // name -> { uri, line, character, signature, doc, params }
-    stats: new Map(), // name -> { uri, line, character, namespace, signature, doc }
+    stats: new Map(), // name -> Array<{ uri, line, character, namespace, signature, doc }>
 };
 
 // Cache for file modification times to avoid re-parsing unchanged files
@@ -461,18 +461,21 @@ function activate(context) {
                     return new vscode.Hover(md);
                 }
                 if (workspaceIndex.stats.has(token)) {
-                    const info = workspaceIndex.stats.get(token);
-                    const md = new vscode.MarkdownString();
-                    md.isTrusted = true;
-                    const parts = [];
-                    if (info.doc) parts.push(info.doc);
-                    if (info.signature) {
-                        parts.push('```hsl');
-                        parts.push(info.signature);
-                        parts.push('```');
+                    const arr = workspaceIndex.stats.get(token) || [];
+                    const chosen = chooseStatForPosition(document, position.line, arr);
+                    if (chosen) {
+                        const md = new vscode.MarkdownString();
+                        md.isTrusted = true;
+                        const parts = [];
+                        if (chosen.doc) parts.push(chosen.doc);
+                        if (chosen.signature) {
+                            parts.push('```hsl');
+                            parts.push(chosen.signature);
+                            parts.push('```');
+                        }
+                        md.value = parts.join('\n');
+                        return new vscode.Hover(md);
                     }
-                    md.value = parts.join('\n');
-                    return new vscode.Hover(md);
                 }
                 return null;
             }
@@ -526,8 +529,11 @@ function activate(context) {
                     return new vscode.Location(loc.uri, new vscode.Position(loc.line, loc.character || 0));
                 }
                 if (workspaceIndex.stats.has(token)) {
-                    const loc = workspaceIndex.stats.get(token);
-                    return new vscode.Location(loc.uri, new vscode.Position(loc.line, loc.character || 0));
+                    const arr = workspaceIndex.stats.get(token) || [];
+                    const chosen = chooseStatForPosition(document, position.line, arr);
+                    if (chosen) {
+                        return new vscode.Location(chosen.uri, new vscode.Position(chosen.line, chosen.character || 0));
+                    }
                 }
                 return null;
             }
@@ -799,9 +805,10 @@ function activate(context) {
                     if (currentWordRange) ci.range = currentWordRange;
                     items.push(ci);
                 }
-                for (const [statName, loc] of workspaceIndex.stats) {
+                for (const [statName, locs] of workspaceIndex.stats) {
                     const ci = new vscode.CompletionItem(statName, vscode.CompletionItemKind.Variable);
-                    ci.detail = `stat (${loc.namespace})`;
+                    const first = Array.isArray(locs) && locs.length > 0 ? locs[0] : undefined;
+                    if (first && first.namespace) ci.detail = `stat (${first.namespace})`;
                     items.push(ci);
                 }
 
@@ -955,6 +962,84 @@ function getCallContext(document, position) {
     return { fnName: m[1] };
 }
 
+function getEnclosingBlockRange(lines, startLine) {
+    // Find the function or macro block that encloses startLine using a pre-scan heuristic
+    // This simple fallback walks upwards to the nearest '{' and matches braces
+    let openLine = startLine;
+    while (openLine >= 0 && lines[openLine].indexOf('{') === -1) openLine--;
+    if (openLine < 0) return null;
+    let brace = 0;
+    for (let i = openLine; i < lines.length; i++) {
+        const s = lines[i];
+        brace += (s.match(/\{/g) || []).length;
+        brace -= (s.match(/\}/g) || []).length;
+        if (brace === 0) {
+            return { start: openLine, end: i };
+        }
+    }
+    return null;
+}
+
+function computeEnclosingBlocks(lines) {
+    /** @type {Array<{kind:'fn'|'macro', name:string, headerStart:number, bodyStart:number, bodyEnd:number}>} */
+    const blocks = [];
+    for (let i = 0; i < lines.length; i++) {
+        const t = lines[i].trim();
+        let m = /^(fn|macro)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(t);
+        if (!m) continue;
+        const kind = m[1] === 'fn' ? 'fn' : 'macro';
+        const name = m[2];
+        // Find the '{' that starts the body, scanning forward from i
+        let bodyStart = -1;
+        let j = i;
+        while (j < lines.length) {
+            const line = lines[j];
+            const idx = line.indexOf('{');
+            if (idx !== -1) { bodyStart = j; break; }
+            j++;
+        }
+        if (bodyStart === -1) continue;
+        // Match braces to find the end of the block
+        let brace = 0;
+        let bodyEnd = -1;
+        for (let k = bodyStart; k < lines.length; k++) {
+            const s = lines[k];
+            brace += (s.match(/\{/g) || []).length;
+            brace -= (s.match(/\}/g) || []).length;
+            if (brace === 0) { bodyEnd = k; break; }
+        }
+        if (bodyEnd !== -1) blocks.push({ kind, name, headerStart: i, bodyStart, bodyEnd });
+    }
+    return blocks;
+}
+
+function chooseStatForPosition(document, lineNumber, statDecls) {
+    if (!Array.isArray(statDecls) || statDecls.length === 0) return null;
+    // If only one, return it
+    if (statDecls.length === 1) return statDecls[0];
+    const lines = document.getText().split(/\r?\n/);
+    // Compute current container key
+    const blocks = computeEnclosingBlocks(lines);
+    let currentContainer = '';
+    for (const b of blocks) {
+        if (lineNumber >= b.bodyStart && lineNumber <= b.bodyEnd) {
+            currentContainer = `${b.kind}:${b.name}:${b.bodyStart}-${b.bodyEnd}`;
+            break;
+        }
+    }
+    if (currentContainer) {
+        const sameScope = statDecls.filter(d => d.container === currentContainer && d.uri.fsPath === document.uri.fsPath);
+        if (sameScope.length > 0) return sameScope[0];
+    }
+    // Otherwise, prefer file-level stat without a container (global scope within file)
+    const fileLevel = statDecls.filter(d => (!d.container || d.container === '') && d.uri.fsPath === document.uri.fsPath);
+    if (fileLevel.length > 0) return fileLevel[0];
+    // Fallback to any declaration in same file
+    const sameFile = statDecls.filter(d => d.uri.fsPath === document.uri.fsPath);
+    if (sameFile.length > 0) return sameFile[0];
+    return statDecls[0];
+}
+
 async function indexDocumentUri(uri) {
     try {
         const doc = await vscode.workspace.openTextDocument(uri);
@@ -972,7 +1057,13 @@ function removeDocumentUri(uri) {
     if (prev.constants) for (const name of prev.constants) workspaceIndex.constants.delete(name);
     if (prev.functions) for (const name of prev.functions) workspaceIndex.functions.delete(name);
     if (prev.macros) for (const name of prev.macros) workspaceIndex.macros.delete(name);
-    if (prev.stats) for (const s of prev.stats) workspaceIndex.stats.delete(s.name);
+    if (prev.stats) for (const s of prev.stats) {
+        const arr = workspaceIndex.stats.get(s.name);
+        if (arr) {
+            workspaceIndex.stats.set(s.name, arr.filter(x => x.uri.fsPath !== document.uri.fsPath || x.line !== s.line));
+            if (workspaceIndex.stats.get(s.name)?.length === 0) workspaceIndex.stats.delete(s.name);
+        }
+    }
     wsFileToSymbols.delete(path);
 }
 
@@ -996,9 +1087,22 @@ function indexTextDocument(document) {
         if (prev.constants) for (const name of prev.constants) workspaceIndex.constants.delete(name);
         if (prev.functions) for (const name of prev.functions) workspaceIndex.functions.delete(name);
         if (prev.macros) for (const name of prev.macros) workspaceIndex.macros.delete(name);
-        if (prev.stats) for (const s of prev.stats) workspaceIndex.stats.delete(s.name);
+        if (prev.stats) for (const s of prev.stats) {
+            const arr = workspaceIndex.stats.get(s.name);
+            if (arr) {
+                workspaceIndex.stats.set(s.name, arr.filter(x => x.uri.fsPath !== document.uri.fsPath || x.line !== s.line));
+                if (workspaceIndex.stats.get(s.name)?.length === 0) workspaceIndex.stats.delete(s.name);
+            }
+        }
     }
     const fileSymbols = { constants: new Set(), functions: new Set(), macros: new Set(), stats: [] };
+    const blocks = computeEnclosingBlocks(lines);
+    const findContainerForLine = (lineNumber) => {
+        for (const b of blocks) {
+            if (lineNumber >= b.bodyStart && lineNumber <= b.bodyEnd) return b;
+        }
+        return null;
+    };
 
     // Helper to get documentation and annotations above a line
     const getDocAbove = (lineIndex) => {
@@ -1160,15 +1264,20 @@ function indexTextDocument(document) {
             const charIndex = raw.indexOf(name);
             const { doc, annotations } = getDocAbove(i);
             const fullSignature = (annotations.length > 0 ? annotations.join('\n') + '\n' + raw : raw).trim();
-            fileSymbols.stats.push({ namespace: ns, name });
-            workspaceIndex.stats.set(name, { 
-                uri: document.uri, 
-                line: i, 
-                character: charIndex, 
+            const container = findContainerForLine(i);
+            const containerKey = container ? `${container.kind}:${container.name}:${container.bodyStart}-${container.bodyEnd}` : '';
+            fileSymbols.stats.push({ namespace: ns, name, line: i, uri: document.uri });
+            const existing = workspaceIndex.stats.get(name) || [];
+            existing.push({
+                uri: document.uri,
+                line: i,
+                character: charIndex,
                 namespace: ns,
                 signature: fullSignature,
-                doc
+                doc,
+                container: containerKey
             });
+            workspaceIndex.stats.set(name, existing);
             continue;
         }
     }
