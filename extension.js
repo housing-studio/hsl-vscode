@@ -695,6 +695,41 @@ function activate(context) {
                     }
                 }
 
+                // If inside a stat declaration type position: "stat <ns> <name>: <Type>"
+                {
+                    const statTypeMatch = /(^|\s)stat\s+(player|team|global)\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*([A-Za-z_]*)$/.exec(before);
+                    if (statTypeMatch) {
+                        const afterColonIdx = before.lastIndexOf(':') + 1;
+                        const spacesMatch = /^\s*/.exec(before.slice(afterColonIdx)) || [''];
+                        const startCol = afterColonIdx + spacesMatch[0].length;
+                        const replaceRange = new vscode.Range(position.line, startCol, position.line, position.character);
+
+                        // Builtin types
+                        const builtinTypes = ['void','int','float','string','bool','any'];
+                        for (const t of builtinTypes) {
+                            const ci = new vscode.CompletionItem(t, vscode.CompletionItemKind.Keyword);
+                            ci.detail = 'builtin type';
+                            ci.range = replaceRange;
+                            ci.sortText = '0_' + t;
+                            items.push(ci);
+                        }
+
+                        // Declared types (enums, structs) - insert just the type name
+                        for (const [name, t] of Object.entries(typesIndex)) {
+                            const kind = t.kind === 'enum' ? vscode.CompletionItemKind.Enum : vscode.CompletionItemKind.Struct;
+                            const item = new vscode.CompletionItem(name, kind);
+                            item.detail = t.kind;
+                            if (t.signature) item.documentation = new vscode.MarkdownString('```hsl\n' + t.signature + '\n```');
+                            item.insertText = name;
+                            item.range = replaceRange;
+                            item.sortText = '0_' + name;
+                            items.push(item);
+                        }
+
+                        return items;
+                    }
+                }
+
                 // If we're after 'Enum::', only suggest that enum's members
                 if ((pendingRhs || (lhs && rhs !== undefined)) && lhs && enumMembersIndex[lhs]) {
                     for (const [memberName, em] of Object.entries(enumMembersIndex[lhs])) {
