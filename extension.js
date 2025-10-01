@@ -198,6 +198,8 @@ let conditionsIndex = {};
 let conditionsFilePath = '';
 let typesIndex = {}; // name -> { kind, doc, signature, filePath, line, character }
 let enumMembersIndex = {}; // enumName -> memberName -> { doc, filePath, line, character }
+// Std library constants index
+let stdConstantsIndex = new Map(); // name -> { filePath, line, character, signature, doc }
 // Workspace symbol indexes
 let wsFileToSymbols = new Map(); // uri.fsPath -> { constants:Set<string>, functions:Set<string>, macros:Set<string>, stats:Array<{namespace:string,name:string,line:number,uri:vscode.Uri}> }
 let workspaceIndex = {
@@ -265,6 +267,7 @@ function activate(context) {
         // Rebuild std types index (enums, structs, and enum members) with caching
         typesIndex = {};
         enumMembersIndex = {};
+        stdConstantsIndex = new Map();
         const stdRoot = path.join('hsl-std', 'hypixel');
         const stdAbs = context.asAbsolutePath(stdRoot);
         if (fs.existsSync(stdAbs)) {
@@ -272,6 +275,7 @@ function activate(context) {
             for (const file of files) {
                 try {
                     indexTypesInFileCached(file);
+                    indexStdConstantsInFileCached(file);
                 } catch (e) {
                     console.warn('[HSL] Failed to index types in', file, e);
                 }
@@ -440,6 +444,22 @@ function activate(context) {
                     return new vscode.Hover(md);
                 }
 
+                // Std constants hover
+                if (stdConstantsIndex.has(token)) {
+                    const c = stdConstantsIndex.get(token);
+                    const md = new vscode.MarkdownString();
+                    md.isTrusted = true;
+                    const parts = [];
+                    if (c.doc) parts.push(c.doc);
+                    if (c.signature) {
+                        parts.push('```hsl');
+                        parts.push(c.signature);
+                        parts.push('```');
+                    }
+                    md.value = parts.join('\n');
+                    return new vscode.Hover(md);
+                }
+
                 // Workspace user symbols hover
                 if (workspaceIndex.constants.has(token)) {
                     const info = workspaceIndex.constants.get(token);
@@ -455,6 +475,21 @@ function activate(context) {
                     md.value = parts.join('\n');
                     return new vscode.Hover(md);
                 }
+        // Std constants as fallback hover
+        if (stdConstantsIndex.has(token)) {
+            const c = stdConstantsIndex.get(token);
+            const md = new vscode.MarkdownString();
+            md.isTrusted = true;
+            const parts = [];
+            if (c.doc) parts.push(c.doc);
+            if (c.signature) {
+                parts.push('```hsl');
+                parts.push(c.signature);
+                parts.push('```');
+            }
+            md.value = parts.join('\n');
+            return new vscode.Hover(md);
+        }
                 if (workspaceIndex.functions.has(token)) {
                     const info = workspaceIndex.functions.get(token);
                     const md = new vscode.MarkdownString();
@@ -542,6 +577,12 @@ function activate(context) {
                 if (workspaceIndex.constants.has(token)) {
                     const loc = workspaceIndex.constants.get(token);
                     return new vscode.Location(loc.uri, new vscode.Position(loc.line, loc.character || 0));
+                }
+                // std constants
+                if (stdConstantsIndex.has(token)) {
+                    const c = stdConstantsIndex.get(token);
+                    const uri = vscode.Uri.file(c.filePath);
+                    return new vscode.Location(uri, new vscode.Position(c.line, c.character || 0));
                 }
                 if (workspaceIndex.functions.has(token)) {
                     const loc = workspaceIndex.functions.get(token);
@@ -1014,6 +1055,73 @@ function indexTypesInFileCached(filePath) {
         mtime: stats.mtimeMs, 
         data: { types: newTypes, enumMembers: newMembers } 
     });
+}
+
+function indexStdConstantsInFileCached(filePath) {
+    const stats = fs.statSync(filePath);
+    const cacheKey = filePath + '.stdconsts';
+    const cached = fileCache.get(cacheKey);
+    if (cached && cached.mtime >= stats.mtimeMs) {
+        // Merge cached
+        for (const [name, loc] of Object.entries(cached.data)) {
+            stdConstantsIndex.set(name, loc);
+        }
+        return;
+    }
+    const found = indexStdConstantsInFile(filePath);
+    fileCache.set(cacheKey, { mtime: stats.mtimeMs, data: Object.fromEntries(stdConstantsIndex) });
+}
+
+function indexStdConstantsInFile(filePath) {
+    try {
+        const text = fs.readFileSync(filePath, 'utf8');
+        const lines = text.split(/\r?\n/);
+        for (let i = 0; i < lines.length; i++) {
+            const raw = lines[i];
+            const t = raw.trim();
+            const m = /^const\s+([A-Za-z_][A-Za-z0-9_]*)\b/.exec(t);
+            if (m) {
+                const name = m[1];
+                const charIndex = raw.indexOf(name);
+                // Collect documentation and annotations above this constant
+                let docLines = [];
+                let annotations = [];
+                let j = i - 1;
+                while (j >= 0) {
+                    const tt = lines[j].trim();
+                    if (tt.startsWith('//')) {
+                        docLines.push(tt.replace(/^\/\/\s?/, ''));
+                        j--;
+                        continue;
+                    }
+                    if (tt.startsWith('@')) {
+                        annotations.push(tt);
+                        j--;
+                        continue;
+                    }
+                    if (tt === '') {
+                        docLines.push('');
+                        j--;
+                        continue;
+                    }
+                    break;
+                }
+                docLines.reverse();
+                annotations.reverse();
+                const doc = docLines.join('\n').trim();
+                const fullSignature = (annotations.length > 0 ? annotations.join('\n') + '\n' + raw : raw).trim();
+                stdConstantsIndex.set(name, {
+                    filePath,
+                    line: i,
+                    character: charIndex,
+                    signature: fullSignature,
+                    doc
+                });
+            }
+        }
+    } catch (e) {
+        // ignore per-file issues
+    }
 }
 
 module.exports = {
