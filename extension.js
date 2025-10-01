@@ -720,6 +720,11 @@ function activate(context) {
                     'else block'
                 ));
                 items.push(mkSnippet(
+                    'main',
+                    'macro main() {\n\t$0\n}',
+                    'main macro',
+                ));
+                items.push(mkSnippet(
                     'random',
                     'random {\n\t$0\n}',
                     'random block'
