@@ -200,6 +200,8 @@ let typesIndex = {}; // name -> { kind, doc, signature, filePath, line, characte
 let enumMembersIndex = {}; // enumName -> memberName -> { doc, filePath, line, character }
 // Std library constants index
 let stdConstantsIndex = new Map(); // name -> { filePath, line, character, signature, doc }
+// Std library macros index
+let stdMacrosIndex = new Map(); // name -> { filePath, line, character, signature, doc, params: Array<{name:string,type:string,default?:string}> }
 // Workspace symbol indexes
 let wsFileToSymbols = new Map(); // uri.fsPath -> { constants:Set<string>, functions:Set<string>, macros:Set<string>, stats:Array<{namespace:string,name:string,line:number,uri:vscode.Uri}> }
 let workspaceIndex = {
@@ -268,7 +270,8 @@ function activate(context) {
         typesIndex = {};
         enumMembersIndex = {};
         stdConstantsIndex = new Map();
-        const stdRoot = path.join('hsl-std', 'hypixel');
+        stdMacrosIndex = new Map();
+        const stdRoot = path.join('hsl-std');
         const stdAbs = context.asAbsolutePath(stdRoot);
         if (fs.existsSync(stdAbs)) {
             const files = listHslFiles(stdAbs);
@@ -276,6 +279,7 @@ function activate(context) {
                 try {
                     indexTypesInFileCached(file);
                     indexStdConstantsInFileCached(file);
+                    indexStdMacrosInFileCached(file);
                 } catch (e) {
                     console.warn('[HSL] Failed to index types in', file, e);
                 }
@@ -324,7 +328,7 @@ function activate(context) {
     }
 
     // Watch std directory for changes
-    const stdDir = context.asAbsolutePath(path.join('hsl-std', 'hypixel'));
+    const stdDir = context.asAbsolutePath(path.join('hsl-std'));
     if (fs.existsSync(stdDir)) {
         try {
             const watcherStd = fs.watch(stdDir, { persistent: false, recursive: true }, () => buildIndex());
@@ -518,6 +522,21 @@ function activate(context) {
                     md.value = parts.join('\n');
                     return new vscode.Hover(md);
                 }
+                // std macros hover
+                if (stdMacrosIndex.has(token)) {
+                    const info = stdMacrosIndex.get(token);
+                    const md = new vscode.MarkdownString();
+                    md.isTrusted = true;
+                    const parts = [];
+                    if (info.doc) parts.push(info.doc);
+                    if (info.signature) {
+                        parts.push('```hsl');
+                        parts.push(info.signature);
+                        parts.push('```');
+                    }
+                    md.value = parts.join('\n');
+                    return new vscode.Hover(md);
+                }
                 if (workspaceIndex.stats.has(token)) {
                     const arr = workspaceIndex.stats.get(token) || [];
                     const chosen = chooseStatForPosition(document, position.line, arr);
@@ -591,6 +610,11 @@ function activate(context) {
                 if (workspaceIndex.macros.has(token)) {
                     const loc = workspaceIndex.macros.get(token);
                     return new vscode.Location(loc.uri, new vscode.Position(loc.line, loc.character || 0));
+                }
+                if (stdMacrosIndex.has(token)) {
+                    const info = stdMacrosIndex.get(token);
+                    const uri = vscode.Uri.file(info.filePath);
+                    return new vscode.Location(uri, new vscode.Position(info.line, info.character || 0));
                 }
                 if (workspaceIndex.stats.has(token)) {
                     const arr = workspaceIndex.stats.get(token) || [];
@@ -853,6 +877,16 @@ function activate(context) {
                 for (const [constName, loc] of workspaceIndex.constants) {
                     const ci = new vscode.CompletionItem(constName, vscode.CompletionItemKind.Constant);
                     ci.detail = 'constant';
+                    if (loc.signature) ci.documentation = new vscode.MarkdownString('```hsl\n' + loc.signature + '\n```');
+                    if (currentWordRange) ci.range = currentWordRange;
+                    items.push(ci);
+                }
+                // Std constants
+                for (const [name, info] of stdConstantsIndex) {
+                    const ci = new vscode.CompletionItem(name, vscode.CompletionItemKind.Constant);
+                    ci.detail = 'std constant';
+                    if (info.signature) ci.documentation = new vscode.MarkdownString('```hsl\n' + info.signature + '\n```');
+                    if (currentWordRange) ci.range = currentWordRange;
                     items.push(ci);
                 }
                 for (const [fnName, loc] of workspaceIndex.functions) {
@@ -866,6 +900,16 @@ function activate(context) {
                     const ci = new vscode.CompletionItem(macroName, vscode.CompletionItemKind.Snippet);
                     ci.detail = 'macro';
                     ci.insertText = new vscode.SnippetString(`${macroName}!($0)`);
+                    if (loc.signature) ci.documentation = new vscode.MarkdownString('```hsl\n' + loc.signature + '\n```');
+                    if (currentWordRange) ci.range = currentWordRange;
+                    items.push(ci);
+                }
+                // Std macros
+                for (const [macroName, info] of stdMacrosIndex) {
+                    const ci = new vscode.CompletionItem(macroName, vscode.CompletionItemKind.Snippet);
+                    ci.detail = 'std macro';
+                    ci.insertText = new vscode.SnippetString(`${macroName}!($0)`);
+                    if (info.signature) ci.documentation = new vscode.MarkdownString('```hsl\n' + info.signature + '\n```');
                     if (currentWordRange) ci.range = currentWordRange;
                     items.push(ci);
                 }
@@ -1070,6 +1114,79 @@ function indexStdConstantsInFileCached(filePath) {
     }
     const found = indexStdConstantsInFile(filePath);
     fileCache.set(cacheKey, { mtime: stats.mtimeMs, data: Object.fromEntries(stdConstantsIndex) });
+}
+
+function indexStdMacrosInFileCached(filePath) {
+    const stats = fs.statSync(filePath);
+    const cacheKey = filePath + '.stdmacros';
+    const cached = fileCache.get(cacheKey);
+    if (cached && cached.mtime >= stats.mtimeMs) {
+        for (const [name, loc] of Object.entries(cached.data)) stdMacrosIndex.set(name, loc);
+        return;
+    }
+    indexStdMacrosInFile(filePath);
+    fileCache.set(cacheKey, { mtime: stats.mtimeMs, data: Object.fromEntries(stdMacrosIndex) });
+}
+
+function indexStdMacrosInFile(filePath) {
+    try {
+        const text = fs.readFileSync(filePath, 'utf8');
+        const lines = text.split(/\r?\n/);
+        for (let i = 0; i < lines.length; i++) {
+            const raw = lines[i];
+            const t = raw.trim();
+            // match: macro Name(
+            let m = /^macro\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(t);
+            if (m) {
+                const name = m[1];
+                const charIndex = raw.indexOf(name);
+                // Collect doc/annotations above
+                let docLines = [];
+                let annotations = [];
+                let j = i - 1;
+                while (j >= 0) {
+                    const tt = lines[j].trim();
+                    if (tt.startsWith('//')) { docLines.push(tt.replace(/^\/\/\s?/, '')); j--; continue; }
+                    if (tt.startsWith('@')) { annotations.push(tt); j--; continue; }
+                    if (tt === '') { docLines.push(''); j--; continue; }
+                    break;
+                }
+                docLines.reverse();
+                annotations.reverse();
+                // Collect signature (possibly multiline until closing ')')
+                let signatureLines = [raw];
+                let k = i + 1;
+                let paren = (raw.match(/\(/g) || []).length - (raw.match(/\)/g) || []).length;
+                while (k < lines.length && paren > 0) {
+                    const s = lines[k];
+                    signatureLines.push(s);
+                    paren += (s.match(/\(/g) || []).length - (s.match(/\)/g) || []).length;
+                    k++;
+                }
+                const signature = signatureLines.join('\n');
+                const fullSignature = (annotations.length > 0 ? annotations.join('\n') + '\n' + signature : signature).trim();
+                // Parse params
+                const openIdx = signature.indexOf('(');
+                const closeIdx = signature.lastIndexOf(')');
+                const params = [];
+                if (openIdx !== -1 && closeIdx !== -1 && closeIdx > openIdx) {
+                    const paramStr = signature.slice(openIdx + 1, closeIdx);
+                    const parts = splitTopLevel(paramStr, ',');
+                    for (const rawParam of parts) {
+                        const p = rawParam.trim();
+                        if (!p) continue;
+                        const pm = /^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^=]+?)(?:\s*=\s*(.+))?$/.exec(p);
+                        if (pm) {
+                            params.push({ name: pm[1].trim(), type: pm[2].trim(), default: pm[3] ? pm[3].trim() : undefined });
+                        }
+                    }
+                }
+                stdMacrosIndex.set(name, { filePath, line: i, character: charIndex, signature: fullSignature, doc: docLines.join('\n').trim(), params });
+            }
+        }
+    } catch (e) {
+        // ignore per-file issues
+    }
 }
 
 function indexStdConstantsInFile(filePath) {
