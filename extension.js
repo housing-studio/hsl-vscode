@@ -684,6 +684,7 @@ function activate(context) {
                     'join','quit','death','kill','respawn','groupChange','pvpStateChange','fishCaught','enterPortal','damage','blockBreak','startParkour','completeParkour','dropItem','pickUpItem','changeHeldItem','toggleSneak','toggleFlight'
                 ];
                 const namespaces = ['player','team','global'];
+                const annotations = ['description','icon','loop','executor','priority','listed'];
 
                 const mkSnippet = (label, snippet, detail) => {
                     const ci = new vscode.CompletionItem(label, vscode.CompletionItemKind.Snippet);
@@ -734,6 +735,25 @@ function activate(context) {
                     statSnippet,
                     'declare local variable (stat)'
                 ));
+
+                // Annotations completions
+                {
+                    const before = document.lineAt(position.line).text.slice(0, position.character);
+                    const annMatch = /@([A-Za-z_]*)$/.exec(before);
+                    let replaceRange = currentWordRange;
+                    if (annMatch) {
+                        const startCol = position.character - annMatch[1].length - 1; // include '@'
+                        replaceRange = new vscode.Range(position.line, startCol, position.line, position.character);
+                    }
+                    for (const name of annotations) {
+                        const label = `@${name}`;
+                        const ci = new vscode.CompletionItem(label, vscode.CompletionItemKind.Snippet);
+                        ci.detail = 'annotation';
+                        ci.insertText = new vscode.SnippetString(`@${name}($0)`);
+                        if (replaceRange) ci.range = replaceRange;
+                        items.push(ci);
+                    }
+                }
 
                 // Context-aware: if user typed 'event ' then suggest event types with block
                 const before = document.lineAt(position.line).text.slice(0, position.character);
@@ -970,7 +990,7 @@ function activate(context) {
 
                 return items;
             }
-        }, ':', ':', '(', ',', '=', ']') // trigger inside calls and qualified names and after slice
+        }, ':', ':', '(', ',', '=', ']', '@') // trigger inside calls, qualified names, after slice, and annotations
     );
 
     // Add command to manually check current document
