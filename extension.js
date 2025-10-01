@@ -964,7 +964,12 @@ async function checkDocumentForErrors(document) {
             // Only show real diagnostics, no test diagnostic
             
             console.log('[HSL Extension] Setting diagnostics for', document.uri.toString(), ':', vscodeDiagnostics.length, 'diagnostics');
-            diagnosticCollection.set(document.uri, vscodeDiagnostics);
+            // When diagnostics are empty, explicitly clear for this document to avoid stale state
+            if (vscodeDiagnostics.length === 0) {
+                diagnosticCollection.delete(document.uri);
+            } else {
+                diagnosticCollection.set(document.uri, vscodeDiagnostics);
+            }
         } else {
             console.log('[HSL Extension] No diagnostic collection available');
         }

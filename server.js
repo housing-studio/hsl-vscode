@@ -85,46 +85,40 @@ class HSLanguageServer {
         }
 
         try {
-            // Create a temporary HSL project directory
-            const tempDir = path.join(this.workspaceRoot, '.hsl-temp');
-            if (!fs.existsSync(tempDir)) {
-                fs.mkdirSync(tempDir, { recursive: true });
+            // Find the nearest HSL project root (directory containing build.toml)
+            const projectDir = this.findProjectRoot(path.dirname(filePath));
+            if (!projectDir) {
+                console.log('[HSL Language Server] No build.toml found up the tree. Skipping diagnostics.');
+                return [];
             }
-            
-            // Create a build.toml file for the HSL project
-            const buildTomlPath = path.join(tempDir, 'build.toml');
-            if (!fs.existsSync(buildTomlPath)) {
-                const buildTomlContent = `[package]
-id = "temp-project"
-name = "Temporary HSL Project"
-author = "HSL Language Server"
-description = "Temporary project for error checking"
-version = "1.0.0"
-`;
-                fs.writeFileSync(buildTomlPath, buildTomlContent, 'utf8');
-            }
-            
-            const tempFile = path.join(tempDir, path.basename(filePath));
-            fs.writeFileSync(tempFile, content, 'utf8');
-            console.log('[HSL Language Server] Created temp file:', tempFile);
 
-            // Run the HSL compiler with error output
-            const diagnostics = await this.runCompiler(tempDir, tempFile);
-            console.log('[HSL Language Server] Found diagnostics:', diagnostics.length);
-            
-            // Clean up temp files
+            // Ensure file on disk matches current content (for accurate diagnostics)
             try {
-                fs.unlinkSync(tempFile);
-                fs.unlinkSync(buildTomlPath);
-            } catch (e) {
-                // Ignore cleanup errors
+                fs.writeFileSync(filePath, content, 'utf8');
+            } catch (_) {
+                // If we cannot write, continue with whatever is on disk
             }
 
+            // Run the HSL compiler diagnostics at the project root
+            const diagnostics = await this.runCompiler(projectDir, filePath);
+            console.log('[HSL Language Server] Found diagnostics:', diagnostics.length);
             return diagnostics;
         } catch (error) {
             console.error('[HSL Language Server] Error checking file:', error);
             return [];
         }
+    }
+
+    findProjectRoot(startDir) {
+        let dir = startDir;
+        for (let i = 0; i < 20; i++) { // walk up at most 20 levels
+            const buildPath = path.join(dir, 'build.toml');
+            if (fs.existsSync(buildPath)) return dir;
+            const parent = path.dirname(dir);
+            if (parent === dir) break;
+            dir = parent;
+        }
+        return null;
     }
 
     async runCompiler(projectDir, filePath) {
