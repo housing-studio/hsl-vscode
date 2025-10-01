@@ -719,6 +719,11 @@ function activate(context) {
                     'else block'
                 ));
                 items.push(mkSnippet(
+                    'random',
+                    'random {\n\t$0\n}',
+                    'random block'
+                ));
+                items.push(mkSnippet(
                     'return',
                     'return ${1:value}',
                     'return statement'
