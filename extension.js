@@ -699,7 +699,7 @@ function activate(context) {
                 ));
                 items.push(mkSnippet(
                     'macro',
-                    'macro ${1:name}(${2:params}) {\n\t$0\n}',
+                    'macro ${1:name}(${2}) {\n\t$0\n}',
                     'macro declaration'
                 ));
                 const eventSnippet = 'event ' + '${1|' + eventTypes.join(',') + '|} {\n\t$0\n}';
