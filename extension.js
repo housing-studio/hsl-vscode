@@ -1012,7 +1012,19 @@ async function checkDocumentForErrors(document) {
         
         // Update diagnostics collection
         if (diagnosticCollection) {
-            const vscodeDiagnostics = diagnostics.map(diag => {
+            const vscodeDiagnostics = diagnostics
+                .filter(diag => {
+                    // Only show diagnostics that belong to this document
+                    if (diag.filePath) {
+                        try {
+                            return path.normalize(diag.filePath) === path.normalize(document.uri.fsPath);
+                        } catch (_) {
+                            return true;
+                        }
+                    }
+                    return true;
+                })
+                .map(diag => {
                 console.log('[HSL Extension] Converting diagnostic:', diag);
                 const diagnostic = new vscode.Diagnostic(
                     new vscode.Range(

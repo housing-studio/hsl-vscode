@@ -191,6 +191,7 @@ class HSLanguageServer {
                 const fullMessage = [message]
                     .concat((entry.notes || []).map(n => `Note: ${n}`))
                     .join('\n');
+                const entryFile = typeof entry.file === 'string' ? entry.file : undefined;
 
                 // Each entry.errors is a list, each has tokens[]; create a diagnostic per token span
                 const errorsList = Array.isArray(entry.errors) ? entry.errors : [];
@@ -214,7 +215,8 @@ class HSLanguageServer {
                         message,
                         fullMessage,
                         source: 'HSL Compiler',
-                        code: String(entry.code)
+                        code: String(entry.code),
+                        filePath: entryFile
                     });
                 }
             }
