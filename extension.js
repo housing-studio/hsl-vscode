@@ -740,6 +740,11 @@ function activate(context) {
                     statSnippet,
                     'declare local variable (stat)'
                 ));
+                items.push(mkSnippet(
+                    'const',
+                    'const ${1:NAME} = ${2:value}',
+                    'declare constant'
+                ));
 
                 // Annotations completions
                 {
