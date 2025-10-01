@@ -291,7 +291,7 @@
 				}, 
 				{
 					"name": "constant.numeric",
-					"match": "\\b(null|nullptr)\\b"
+					"match": "\\b(nil)\\b"
 				},
 				{
 					"name": "constant.numeric",
