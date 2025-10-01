@@ -135,10 +135,10 @@ version = "1.0.0"
             console.log('[HSL Language Server] Project directory:', projectDir);
             console.log('[HSL Language Server] File to check:', filePath);
             
-            // Run Java with HSL JAR
+            // Run Java with HSL JAR using the diagnostics command (JSON stdout)
             const args = [
                 '-jar', this.hslJarPath,
-                'export' // Use export command which will show errors
+                'diagnostics'
             ];
 
             console.log('[HSL Language Server] Command:', this.javaPath, args.join(' '));
@@ -164,15 +164,10 @@ version = "1.0.0"
                 console.log('[HSL Language Server] stdout:', stdout);
                 console.log('[HSL Language Server] stderr:', stderr);
                 
-                // If compiler failed (exit code 1), parse errors from stderr
-                if (code === 1) {
-                    const errors = this.parseCompilerErrors(stderr, filePath);
-                    console.log('[HSL Language Server] Parsed errors:', errors);
-                    resolve(errors);
-                } else {
-                    // Compilation succeeded, no errors
-                    resolve([]);
-                }
+                // diagnostics command always emits JSON diagnostics to stdout
+                const parsed = this.parseDiagnosticsJson(stdout, filePath);
+                console.log('[HSL Language Server] Parsed diagnostics:', parsed);
+                resolve(parsed);
             });
 
             process.on('error', (error) => {
@@ -190,11 +185,61 @@ version = "1.0.0"
     }
 
     parseCompilerErrors(errorOutput, filePath) {
+        // Legacy fallback not used with diagnostics; keep for safety
+        return this.parseTextErrors(errorOutput, filePath);
+    }
+
+    parseDiagnosticsJson(stdout, filePath) {
+        try {
+            const payload = JSON.parse(stdout);
+            if (!Array.isArray(payload)) return [];
+
+            const diagnostics = [];
+
+            for (const entry of payload) {
+                const severity = entry.type === 'ERROR' ? 1 : 2; // 1=Error, 2=Warning
+                const message = `${entry.type.toLowerCase()}[${entry.code}]: ${entry.title}`;
+                const fullMessage = [message]
+                    .concat((entry.notes || []).map(n => `Note: ${n}`))
+                    .join('\n');
+
+                // Each entry.errors is a list, each has tokens[]; create a diagnostic per token span
+                const errorsList = Array.isArray(entry.errors) ? entry.errors : [];
+                for (const err of errorsList) {
+                    const tokens = Array.isArray(err.tokens) ? err.tokens : [];
+                    if (tokens.length === 0) continue;
+
+                    // Highlight the first token span; optionally merge spans if multiple tokens exist
+                    const tok = tokens[0];
+                    const meta = tok.meta || {};
+                    const lineZero = Math.max(0, (meta.lineNumber || 1) - 1);
+                    const startChar = Math.max(0, meta.lineIndex || 0);
+                    const length = Math.max(1, (meta.endIndex || startChar) - (meta.beginIndex || startChar));
+
+                    diagnostics.push({
+                        severity,
+                        range: {
+                            start: { line: lineZero, character: startChar },
+                            end: { line: lineZero, character: startChar + length }
+                        },
+                        message,
+                        fullMessage,
+                        source: 'HSL Compiler',
+                        code: String(entry.code)
+                    });
+                }
+            }
+
+            return diagnostics;
+        } catch (e) {
+            console.error('[HSL Language Server] Failed to parse diagnostics JSON:', e);
+            return [];
+        }
+    }
+
+    parseTextErrors(errorOutput, filePath) {
         const diagnostics = [];
         const lines = errorOutput.split('\n');
-        
-        console.log('[HSL Language Server] Parsing error output:');
-        console.log('Raw stderr:', errorOutput);
         
         let currentError = null;
         let errorLine = 0;
@@ -285,10 +330,29 @@ version = "1.0.0"
                 if (caretIndex > 0) {
                     // Count the number of ^ characters to determine token length
                     const caretCount = (cleanLine.match(/\^/g) || []).length;
-                    currentError.range = {
-                        start: { line: errorLine, character: caretIndex },
-                        end: { line: errorLine, character: caretIndex + caretCount }
-                    };
+                    
+                    // The HSL compiler shows the caret position relative to the truncated line
+                    // We need to find where the caret starts relative to the " | " marker
+                    const pipeIndex = cleanLine.indexOf('|');
+                    if (pipeIndex !== -1) {
+                        // The caret is after the " | " part
+                        // The position after " | " is the actual column position in the source
+                        const caretStartInLine = caretIndex - pipeIndex - 1; // Remove " | " (3 chars)
+                        
+                        // Use the column from the location line as the base, plus the caret offset
+                        const actualStartColumn = errorColumn + caretStartInLine;
+                        
+                        currentError.range = {
+                            start: { line: errorLine, character: actualStartColumn },
+                            end: { line: errorLine, character: actualStartColumn + caretCount }
+                        };
+                    } else {
+                        // Fallback: use the column from the location line
+                        currentError.range = {
+                            start: { line: errorLine, character: errorColumn },
+                            end: { line: errorLine, character: errorColumn + caretCount }
+                        };
+                    }
                     console.log('[HSL Language Server] Updated error range with caret:', currentError.range);
                 }
             }

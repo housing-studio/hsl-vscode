@@ -940,6 +940,13 @@ async function checkDocumentForErrors(document) {
                     diag.severity === 1 ? vscode.DiagnosticSeverity.Error : vscode.DiagnosticSeverity.Warning
                 );
                 
+                console.log('[HSL Extension] Creating diagnostic:', {
+                    message: diag.message,
+                    severity: diag.severity,
+                    vscodeSeverity: diag.severity === 1 ? 'Error' : 'Warning',
+                    range: diag.range
+                });
+                
                 // Add full message with notes for hover
                 if (diag.fullMessage && diag.fullMessage !== diag.message) {
                     diagnostic.relatedInformation = [{
