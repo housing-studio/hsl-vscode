@@ -715,6 +715,11 @@ function activate(context) {
                     'if statement'
                 ));
                 items.push(mkSnippet(
+                    'command',
+                    'command ${1:name}() {\n\t$0\n}',
+                    'command declaration'
+                ))
+                items.push(mkSnippet(
                     'else',
                     'else {\n\t$0\n}',
                     'else block'
