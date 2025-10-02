@@ -180,6 +180,7 @@ function getPossiblyQualifiedToken(document, position) {
         }
     }
     // Detect pattern 'Enum::' with no member typed yet (cursor after ::)
+    // This handles both end-of-line and before other characters like parentheses
     const pending = /([A-Za-z_][A-Za-z0-9_]*)\s*::\s*$/.exec(lineText.slice(0, position.character));
     if (pending) {
         return { fullToken: pending[0], lhs: pending[1], rhs: '', inRhs: true, inLhs: false, pendingRhs: true };
@@ -679,7 +680,7 @@ function activate(context) {
                 const items = [];
                 const currentWordRange = document.getWordRangeAtPosition(position, /[A-Za-z_][A-Za-z0-9_]*/);
 
-                // Language snippet completions
+                // Language snippet completions (helper constants)
                 const eventTypes = [
                     'join','quit','death','kill','respawn','groupChange','pvpStateChange','fishCaught','enterPortal','damage','blockBreak','startParkour','completeParkour','dropItem','pickUpItem','changeHeldItem','toggleSneak','toggleFlight'
                 ];
@@ -692,64 +693,6 @@ function activate(context) {
                     ci.insertText = new vscode.SnippetString(snippet);
                     return ci;
                 };
-
-                items.push(mkSnippet(
-                    'fn',
-                    'fn ${1:name}(${2}) {\n\t$0\n}',
-                    'function declaration'
-                ));
-                items.push(mkSnippet(
-                    'macro',
-                    'macro ${1:name}(${2}) {\n\t$0\n}',
-                    'macro declaration'
-                ));
-                const eventSnippet = 'event ' + '${1|' + eventTypes.join(',') + '|}() {\n\t$0\n}';
-                items.push(mkSnippet(
-                    'event',
-                    eventSnippet,
-                    'event block'
-                ));
-                items.push(mkSnippet(
-                    'if',
-                    'if (${1:condition}) {\n\t$0\n}',
-                    'if statement'
-                ));
-                items.push(mkSnippet(
-                    'command',
-                    'command ${1:name}() {\n\t$0\n}',
-                    'command declaration'
-                ))
-                items.push(mkSnippet(
-                    'else',
-                    'else {\n\t$0\n}',
-                    'else block'
-                ));
-                items.push(mkSnippet(
-                    'main',
-                    'macro main() {\n\t$0\n}',
-                    'main macro',
-                ));
-                items.push(mkSnippet(
-                    'random',
-                    'random {\n\t$0\n}',
-                    'random block'
-                ));
-                items.push(mkSnippet(
-                    'return',
-                    'return ${1:value}',
-                    'return statement'
-                ));
-                const statSnippet = 'stat ' + '${1|' + namespaces.join(',') + '|} ' + '${2:varName}';
-                items.push(mkSnippet(
-                    'stat',
-                    statSnippet,
-                    'declare local variable (stat)'
-                ));
-                items.push(mkSnippet(
-                    'const',
-                    'const ${1:NAME} = ${2:value}',
-                    'declare constant'
-                ));
 
                 // Annotations completions - only show before fn and command declarations
                 {
@@ -816,7 +759,7 @@ function activate(context) {
                     return items;
                 }
 
-                const { lhs, rhs, pendingRhs } = getPossiblyQualifiedToken(document, position);
+                const { lhs, rhs, pendingRhs, inRhs } = getPossiblyQualifiedToken(document, position);
 
                 // If immediately after a slice specifier '[]', suggest only types (like Go: []int)
                 {
@@ -893,7 +836,7 @@ function activate(context) {
                 }
 
                 // If we're after 'Enum::', only suggest that enum's members
-                if ((pendingRhs || (lhs && rhs !== undefined)) && lhs && enumMembersIndex[lhs]) {
+                if (lhs && enumMembersIndex[lhs] && (pendingRhs || inRhs)) {
                     for (const [memberName, em] of Object.entries(enumMembersIndex[lhs])) {
                         const item = new vscode.CompletionItem(memberName, vscode.CompletionItemKind.EnumMember);
                         item.detail = `${lhs} member`;
@@ -1013,6 +956,65 @@ function activate(context) {
                         items.push(item);
                     }
                 }
+
+                // Language keyword snippets (only in general context, not in specific contexts like enum members)
+                items.push(mkSnippet(
+                    'fn',
+                    'fn ${1:name}(${2}) {\n\t$0\n}',
+                    'function declaration'
+                ));
+                items.push(mkSnippet(
+                    'macro',
+                    'macro ${1:name}(${2}) {\n\t$0\n}',
+                    'macro declaration'
+                ));
+                const eventSnippet = 'event ' + '${1|' + eventTypes.join(',') + '|}() {\n\t$0\n}';
+                items.push(mkSnippet(
+                    'event',
+                    eventSnippet,
+                    'event block'
+                ));
+                items.push(mkSnippet(
+                    'if',
+                    'if (${1:condition}) {\n\t$0\n}',
+                    'if statement'
+                ));
+                items.push(mkSnippet(
+                    'command',
+                    'command ${1:name}() {\n\t$0\n}',
+                    'command declaration'
+                ))
+                items.push(mkSnippet(
+                    'else',
+                    'else {\n\t$0\n}',
+                    'else block'
+                ));
+                items.push(mkSnippet(
+                    'main',
+                    'macro main() {\n\t$0\n}',
+                    'main macro',
+                ));
+                items.push(mkSnippet(
+                    'random',
+                    'random {\n\t$0\n}',
+                    'random block'
+                ));
+                items.push(mkSnippet(
+                    'return',
+                    'return ${1:value}',
+                    'return statement'
+                ));
+                const statSnippet = 'stat ' + '${1|' + namespaces.join(',') + '|} ' + '${2:varName}';
+                items.push(mkSnippet(
+                    'stat',
+                    statSnippet,
+                    'declare local variable (stat)'
+                ));
+                items.push(mkSnippet(
+                    'const',
+                    'const ${1:NAME} = ${2:value}',
+                    'declare constant'
+                ));
 
                 // Builtin types and values
                 const builtinTypes = ['void', 'int', 'float', 'string', 'bool', 'any', '[]'];
