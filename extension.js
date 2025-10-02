@@ -751,22 +751,50 @@ function activate(context) {
                     'declare constant'
                 ));
 
-                // Annotations completions
+                // Annotations completions - only show before fn and command declarations
                 {
                     const before = document.lineAt(position.line).text.slice(0, position.character);
                     const annMatch = /@([A-Za-z_]*)$/.exec(before);
-                    let replaceRange = currentWordRange;
-                    if (annMatch) {
-                        const startCol = position.character - annMatch[1].length - 1; // include '@'
-                        replaceRange = new vscode.Range(position.line, startCol, position.line, position.character);
+                    
+                    // Check if we should show annotation completions
+                    let shouldShowAnnotations = false;
+                    
+                    // Check current line for fn or command declaration
+                    const currentLine = document.lineAt(position.line).text.trim();
+                    if (/^(fn|command)\s+\w+/.test(currentLine)) {
+                        shouldShowAnnotations = true;
                     }
-                    for (const name of annotations) {
-                        const label = `@${name}`;
-                        const ci = new vscode.CompletionItem(label, vscode.CompletionItemKind.Snippet);
-                        ci.detail = 'annotation';
-                        ci.insertText = new vscode.SnippetString(`@${name}($0)`);
-                        if (replaceRange) ci.range = replaceRange;
-                        items.push(ci);
+                    
+                    // Check next non-empty lines for fn or command declaration
+                    if (!shouldShowAnnotations) {
+                        for (let i = position.line + 1; i < document.lineCount; i++) {
+                            const line = document.lineAt(i).text.trim();
+                            if (line === '') continue; // Skip empty lines
+                            if (/^(fn|command)\s+\w+/.test(line)) {
+                                shouldShowAnnotations = true;
+                                break;
+                            }
+                            if (line.startsWith('@') || line.startsWith('//')) {
+                                continue; // Skip annotation lines and comments
+                            }
+                            break; // Stop at first non-empty, non-annotation, non-comment line
+                        }
+                    }
+                    
+                    if (shouldShowAnnotations) {
+                        let replaceRange = currentWordRange;
+                        if (annMatch) {
+                            const startCol = position.character - annMatch[1].length - 1; // include '@'
+                            replaceRange = new vscode.Range(position.line, startCol, position.line, position.character);
+                        }
+                        for (const name of annotations) {
+                            const label = `@${name}`;
+                            const ci = new vscode.CompletionItem(label, vscode.CompletionItemKind.Snippet);
+                            ci.detail = 'annotation';
+                            ci.insertText = new vscode.SnippetString(`@${name}($0)`);
+                            if (replaceRange) ci.range = replaceRange;
+                            items.push(ci);
+                        }
                     }
                 }
 
