@@ -63,13 +63,16 @@ function parseHslFile(filePath) {
             }
 
             // Collect consecutive '//' doc comment lines immediately above
+            // Stop at the first real empty separator line once we've started collecting docs
             let docLines = [];
             let annotations = [];
             let j = i - 1;
+            let startedDoc = false;
             while (j >= 0) {
                 const prev = lines[j];
                 const prevTrim = prev.trim();
                 if (prevTrim.startsWith('//')) {
+                    startedDoc = true;
                     docLines.push(prevTrim.replace(/^\/\/\s?/, ''));
                     j--;
                     continue;
@@ -81,8 +84,7 @@ function parseHslFile(filePath) {
                     continue;
                 }
                 if (prevTrim === '') {
-                    // allow empty lines within the comment block (keep as blank in doc)
-                    docLines.push('');
+                    if (startedDoc) break; // empty line separates license/header from docs
                     j--;
                     continue;
                 }
@@ -1226,11 +1228,12 @@ function indexStdMacrosInFile(filePath) {
                 let docLines = [];
                 let annotations = [];
                 let j = i - 1;
+                let startedDoc = false;
                 while (j >= 0) {
                     const tt = lines[j].trim();
-                    if (tt.startsWith('//')) { docLines.push(tt.replace(/^\/\/\s?/, '')); j--; continue; }
+                    if (tt.startsWith('//')) { startedDoc = true; docLines.push(tt.replace(/^\/\/\s?/, '')); j--; continue; }
                     if (tt.startsWith('@')) { annotations.push(tt); j--; continue; }
-                    if (tt === '') { docLines.push(''); j--; continue; }
+                    if (tt === '') { if (startedDoc) break; j--; continue; }
                     break;
                 }
                 docLines.reverse();
@@ -1286,23 +1289,12 @@ function indexStdConstantsInFile(filePath) {
                 let docLines = [];
                 let annotations = [];
                 let j = i - 1;
+                let startedDoc = false;
                 while (j >= 0) {
                     const tt = lines[j].trim();
-                    if (tt.startsWith('//')) {
-                        docLines.push(tt.replace(/^\/\/\s?/, ''));
-                        j--;
-                        continue;
-                    }
-                    if (tt.startsWith('@')) {
-                        annotations.push(tt);
-                        j--;
-                        continue;
-                    }
-                    if (tt === '') {
-                        docLines.push('');
-                        j--;
-                        continue;
-                    }
+                    if (tt.startsWith('//')) { startedDoc = true; docLines.push(tt.replace(/^\/\/\s?/, '')); j--; continue; }
+                    if (tt.startsWith('@')) { annotations.push(tt); j--; continue; }
+                    if (tt === '') { if (startedDoc) break; j--; continue; }
                     break;
                 }
                 docLines.reverse();
@@ -1524,9 +1516,11 @@ function indexTextDocument(document) {
         let docLines = [];
         let annotations = [];
         let j = lineIndex - 1;
+        let startedDoc = false;
         while (j >= 0) {
             const t = lines[j].trim();
             if (t.startsWith('//')) {
+                startedDoc = true;
                 docLines.push(t.replace(/^\/\/\s?/, ''));
                 j--;
                 continue;
@@ -1538,7 +1532,7 @@ function indexTextDocument(document) {
                 continue;
             }
             if (t === '') {
-                docLines.push('');
+                if (startedDoc) break; // stop at first empty separator once docs started
                 j--;
                 continue;
             }
@@ -1704,14 +1698,16 @@ function indexTypesInFile(filePath) {
     const content = fs.readFileSync(filePath, 'utf8');
     const lines = content.split(/\r?\n/);
 
-    // Parse consecutive doc comments above declarations
+    // Parse consecutive doc comments above declarations; stop at first separator once docs started
     const getDocAbove = (lineIndex) => {
         let docLines = [];
         let annotations = [];
         let j = lineIndex - 1;
+        let startedDoc = false;
         while (j >= 0) {
             const t = lines[j].trim();
             if (t.startsWith('//')) {
+                startedDoc = true;
                 docLines.push(t.replace(/^\/\/\s?/, ''));
                 j--;
                 continue;
@@ -1723,8 +1719,7 @@ function indexTypesInFile(filePath) {
                 continue;
             }
             if (t === '') {
-                // Allow empty lines within comment blocks
-                docLines.push('');
+                if (startedDoc) break; // empty separator after docs; don't cross it
                 j--;
                 continue;
             }
