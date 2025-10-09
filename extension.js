@@ -1489,7 +1489,8 @@ function indexTextDocument(document) {
             constants: prev.constants?.size || 0,
             functions: prev.functions?.size || 0,
             macros: prev.macros?.size || 0,
-            stats: prev.stats?.length || 0
+            stats: prev.stats?.length || 0,
+            enums: prev.enums?.size || 0
         });
         if (prev.constants) for (const name of prev.constants) workspaceIndex.constants.delete(name);
         if (prev.functions) for (const name of prev.functions) workspaceIndex.functions.delete(name);
@@ -1501,8 +1502,14 @@ function indexTextDocument(document) {
                 if (workspaceIndex.stats.get(s.name)?.length === 0) workspaceIndex.stats.delete(s.name);
             }
         }
+        // Remove enums and their members previously indexed from this file
+        if (prev.enums) for (const name of prev.enums) {
+            const t = typesIndex[name];
+            if (t && t.filePath === filePath) delete typesIndex[name];
+            if (enumMembersIndex[name]) delete enumMembersIndex[name];
+        }
     }
-    const fileSymbols = { constants: new Set(), functions: new Set(), macros: new Set(), stats: [] };
+    const fileSymbols = { constants: new Set(), functions: new Set(), macros: new Set(), stats: [], enums: new Set() };
     const blocks = computeEnclosingBlocks(lines);
     const findContainerForLine = (lineNumber) => {
         for (const b of blocks) {
@@ -1546,8 +1553,49 @@ function indexTextDocument(document) {
     for (let i = 0; i < lines.length; i++) {
         const raw = lines[i];
         const t = raw.trim();
+        // enums: enum Name { ... }
+        let m;
+        m = /^enum\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(t);
+        if (m) {
+            const enumName = m[1];
+            const charIndex = raw.indexOf(enumName);
+            const { doc, annotations } = getDocAbove(i);
+            // collect full block until matching '}'
+            let sigLines = [raw];
+            let k = i + 1;
+            let brace = (raw.match(/\{/g) || []).length - (raw.match(/\}/g) || []).length;
+            while (k < lines.length && brace > 0) {
+                sigLines.push(lines[k]);
+                const s = lines[k];
+                brace += (s.match(/\{/g) || []).length - (s.match(/\}/g) || []).length;
+                k++;
+            }
+            const signature = sigLines.join('\n');
+            const fullSignature = (annotations.length > 0 ? annotations.join('\n') + '\n' + signature : signature).trim();
+            typesIndex[enumName] = { kind: 'enum', doc, signature: fullSignature, filePath, line: i, character: Math.max(0, charIndex) };
+            fileSymbols.enums.add(enumName);
+            // members
+            enumMembersIndex[enumName] = enumMembersIndex[enumName] || {};
+            let j = i + 1;
+            while (j < lines.length) {
+                const l = lines[j];
+                const lt = l.trim();
+                if (lt.startsWith('}')) break;
+                const mm = /^([A-Za-z_][A-Za-z0-9_]*)\b/.exec(lt);
+                if (mm) {
+                    const member = mm[1];
+                    const { doc: mdoc, annotations: mannotes } = getDocAbove(j);
+                    const mchar = l.indexOf(member);
+                    const mSig = (mannotes.length > 0 ? mannotes.join('\n') + '\n' + l : l).trim();
+                    enumMembersIndex[enumName][member] = { doc: mdoc, signature: mSig, filePath, line: j, character: Math.max(0, mchar) };
+                }
+                j++;
+            }
+            i = Math.max(i, j - 1);
+            continue;
+        }
         // constants: const NAME = ...
-        let m = /^const\s+([A-Za-z_][A-Za-z0-9_]*)\b/.exec(t);
+        m = /^const\s+([A-Za-z_][A-Za-z0-9_]*)\b/.exec(t);
         if (m) {
             const name = m[1];
             const charIndex = raw.indexOf(name);
