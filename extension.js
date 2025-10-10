@@ -970,6 +970,16 @@ function activate(context) {
                     'macro ${1:name}(${2}) {\n\t$0\n}',
                     'macro declaration'
                 ));
+                items.push(mkSnippet(
+                    'enum',
+                    'enum ${1:Name} {\n\t$0\n}',
+                    'sum enum declaration'
+                ));
+                items.push(mkSnippet(
+                    'enum',
+                    'enum ${1:Name}: ${2:type} {\n\t$0\n}',
+                    'value enum declaration'
+                ));
                 const eventSnippet = 'event ' + '${1|' + eventTypes.join(',') + '|}() {\n\t$0\n}';
                 items.push(mkSnippet(
                     'event',
