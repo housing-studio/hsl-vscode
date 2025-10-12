@@ -980,6 +980,11 @@ function activate(context) {
                     'enum ${1:Name}: ${2:type} {\n\t$0\n}',
                     'value enum declaration'
                 ));
+                items.push(mkSnippet(
+                    'for',
+                    'for (${1:init}; ${2:cond}; ${3:step}) {\n\t$0\n}',
+                    'for loop declaration'
+                ));
                 const eventSnippet = 'event ' + '${1|' + eventTypes.join(',') + '|}() {\n\t$0\n}';
                 items.push(mkSnippet(
                     'event',
