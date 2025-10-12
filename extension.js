@@ -985,6 +985,11 @@ function activate(context) {
                     'for (${1:init}; ${2:cond}; ${3:step}) {\n\t$0\n}',
                     'for loop declaration'
                 ));
+                items.push(mkSnippet(
+                    'fori',
+                    'for (stat player i = 0; i < ${1:count}; i++) {\n\t$0\n}',
+                    'for i in range declaration'
+                ));
                 const eventSnippet = 'event ' + '${1|' + eventTypes.join(',') + '|}() {\n\t$0\n}';
                 items.push(mkSnippet(
                     'event',
