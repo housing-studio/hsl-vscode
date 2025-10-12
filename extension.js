@@ -990,6 +990,11 @@ function activate(context) {
                     'for (stat player i = 0; i < ${1:count}; i++) {\n\t$0\n}',
                     'for i in range declaration'
                 ));
+                items.push(mkSnippet(
+                    'while',
+                    'while (${2:condition}) {\n\t$0\n}',
+                    'white loop declaration'
+                ));
                 const eventSnippet = 'event ' + '${1|' + eventTypes.join(',') + '|}() {\n\t$0\n}';
                 items.push(mkSnippet(
                     'event',
