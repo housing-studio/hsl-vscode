@@ -201,6 +201,7 @@ let conditionsIndex = {};
 let conditionsFilePath = '';
 let typesIndex = {}; // name -> { kind, doc, signature, filePath, line, character }
 let enumMembersIndex = {}; // enumName -> memberName -> { doc, filePath, line, character }
+let structFunctionsIndex = {}; // structName -> functionName -> { doc, filePath, line, character, signature, params }
 // Std library constants index
 let stdConstantsIndex = new Map(); // name -> { filePath, line, character, signature, doc }
 // Std library macros index
@@ -272,6 +273,7 @@ function activate(context) {
         // Rebuild std types index (enums, structs, and enum members) with caching
         typesIndex = {};
         enumMembersIndex = {};
+        structFunctionsIndex = {};
         stdConstantsIndex = new Map();
         stdMacrosIndex = new Map();
         const stdRoot = path.join('hsl-std');
@@ -414,6 +416,20 @@ function activate(context) {
                         parts.push('```hsl');
                         parts.push(`${lhs}::${rhs}`);
                         parts.push('```');
+                        md.value = parts.join('\n');
+                        return new vscode.Hover(md);
+                    }
+                    if (inRhs && structFunctionsIndex[lhs] && structFunctionsIndex[lhs][rhs]) {
+                        const sf = structFunctionsIndex[lhs][rhs];
+                        const md = new vscode.MarkdownString();
+                        md.isTrusted = true;
+                        const parts = [];
+                        if (sf.doc) parts.push(sf.doc);
+                        if (sf.signature) {
+                            parts.push('```hsl');
+                            parts.push(sf.signature);
+                            parts.push('```');
+                        }
                         md.value = parts.join('\n');
                         return new vscode.Hover(md);
                     }
@@ -584,6 +600,14 @@ function activate(context) {
                     const em = enumMembersIndex[lhs][rhs];
                     const uri = vscode.Uri.file(em.filePath);
                     const targetPos = new vscode.Position(em.line, em.character || 0);
+                    return new vscode.Location(uri, targetPos);
+                }
+
+                // struct function (only when hovering RHS)
+                if (lhs && rhs && inRhs && structFunctionsIndex[lhs] && structFunctionsIndex[lhs][rhs]) {
+                    const sf = structFunctionsIndex[lhs][rhs];
+                    const uri = vscode.Uri.file(sf.filePath);
+                    const targetPos = new vscode.Position(sf.line, sf.character || 0);
                     return new vscode.Location(uri, targetPos);
                 }
 
@@ -849,6 +873,20 @@ function activate(context) {
                     }
                     return items;
                 }
+                
+                // If we're after 'Struct::', suggest that struct's functions
+                if (lhs && structFunctionsIndex[lhs] && (pendingRhs || inRhs)) {
+                    for (const [funcName, sf] of Object.entries(structFunctionsIndex[lhs])) {
+                        const item = new vscode.CompletionItem(funcName, vscode.CompletionItemKind.Method);
+                        item.detail = `${lhs} function`;
+                        if (sf.doc) item.documentation = sf.doc;
+                        if (sf.signature) item.documentation = new vscode.MarkdownString('```hsl\n' + sf.signature + '\n```');
+                        // Insert function name with parentheses for call
+                        item.insertText = new vscode.SnippetString(`${funcName}($0)`);
+                        items.push(item);
+                    }
+                    return items;
+                }
 
                 // Inside function call arguments: suggest named arguments 'paramName=' without suppressing other suggestions
                 const callCtx = getCallContext(document, position);
@@ -944,6 +982,11 @@ function activate(context) {
                         item.insertText = new vscode.SnippetString(`${name}::$0`);
                         // After inserting Enum::, immediately trigger suggestions for members
                         item.command = { command: 'editor.action.triggerSuggest', title: 'Trigger Suggest' };
+                    } else if (t.kind === 'struct' && structFunctionsIndex[name]) {
+                        // For structs with functions, help user complete 'Struct::'
+                        item.insertText = new vscode.SnippetString(`${name}::$0`);
+                        // After inserting Struct::, immediately trigger suggestions for functions
+                        item.command = { command: 'editor.action.triggerSuggest', title: 'Trigger Suggest' };
                     }
                     items.push(item);
                 }
@@ -955,6 +998,19 @@ function activate(context) {
                         const item = new vscode.CompletionItem(label, vscode.CompletionItemKind.EnumMember);
                         item.detail = 'enum member';
                         item.insertText = label;
+                        items.push(item);
+                    }
+                }
+
+                // Struct functions as qualified suggestions (Struct::function) in general context
+                for (const [structName, functions] of Object.entries(structFunctionsIndex)) {
+                    for (const funcName of Object.keys(functions)) {
+                        const label = `${structName}::${funcName}`;
+                        const item = new vscode.CompletionItem(label, vscode.CompletionItemKind.Method);
+                        item.detail = 'struct function';
+                        const sf = functions[funcName];
+                        if (sf.signature) item.documentation = new vscode.MarkdownString('```hsl\n' + sf.signature + '\n```');
+                        item.insertText = new vscode.SnippetString(`${structName}::${funcName}($0)`);
                         items.push(item);
                     }
                 }
@@ -1191,22 +1247,28 @@ function indexTypesInFileCached(filePath) {
         // Merge cached data
         Object.assign(typesIndex, cached.data.types);
         Object.assign(enumMembersIndex, cached.data.enumMembers);
+        Object.assign(structFunctionsIndex, cached.data.structFunctions || {});
         return;
     }
     const oldTypes = { ...typesIndex };
     const oldMembers = { ...enumMembersIndex };
+    const oldStructFuncs = { ...structFunctionsIndex };
     indexTypesInFile(filePath);
     const newTypes = {};
     const newMembers = {};
+    const newStructFuncs = {};
     for (const [k, v] of Object.entries(typesIndex)) {
         if (!oldTypes[k]) newTypes[k] = v;
     }
     for (const [k, v] of Object.entries(enumMembersIndex)) {
         if (!oldMembers[k]) newMembers[k] = v;
     }
+    for (const [k, v] of Object.entries(structFunctionsIndex)) {
+        if (!oldStructFuncs[k]) newStructFuncs[k] = v;
+    }
     fileCache.set(filePath + '.types', { 
         mtime: stats.mtimeMs, 
-        data: { types: newTypes, enumMembers: newMembers } 
+        data: { types: newTypes, enumMembers: newMembers, structFunctions: newStructFuncs } 
     });
 }
 
@@ -1530,8 +1592,11 @@ function indexTextDocument(document) {
         // Remove enums and their members previously indexed from this file
         if (prev.enums) for (const name of prev.enums) {
             const t = typesIndex[name];
-            if (t && t.filePath === filePath) delete typesIndex[name];
-            if (enumMembersIndex[name]) delete enumMembersIndex[name];
+            if (t && t.filePath === filePath) {
+                delete typesIndex[name];
+                if (t.kind === 'enum' && enumMembersIndex[name]) delete enumMembersIndex[name];
+                if (t.kind === 'struct' && structFunctionsIndex[name]) delete structFunctionsIndex[name];
+            }
         }
     }
     const fileSymbols = { constants: new Set(), functions: new Set(), macros: new Set(), stats: [], enums: new Set() };
@@ -1617,6 +1682,109 @@ function indexTextDocument(document) {
                 j++;
             }
             i = Math.max(i, j - 1);
+            continue;
+        }
+        // structs: struct Name { ... }
+        m = /^struct\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(t);
+        if (m) {
+            const structName = m[1];
+            const charIndex = raw.indexOf(structName);
+            const { doc, annotations } = getDocAbove(i);
+            // collect full block until matching '}'
+            let sigLines = [raw];
+            let k = i + 1;
+            let brace = (raw.match(/\{/g) || []).length - (raw.match(/\}/g) || []).length;
+            // Find the opening brace - check current line first
+            let braceStart = raw.indexOf('{') !== -1 ? i : -1;
+            // Find the opening brace on subsequent lines if not found on current line
+            while (k < lines.length && brace > 0 && braceStart === -1) {
+                const s = lines[k];
+                sigLines.push(s);
+                const braceIdx = s.indexOf('{');
+                if (braceIdx !== -1) {
+                    braceStart = k;
+                }
+                brace += (s.match(/\{/g) || []).length - (s.match(/\}/g) || []).length;
+                k++;
+            }
+            // Continue collecting lines until brace is balanced
+            while (k < lines.length && brace > 0) {
+                const s = lines[k];
+                sigLines.push(s);
+                brace += (s.match(/\{/g) || []).length - (s.match(/\}/g) || []).length;
+                k++;
+            }
+            const signature = sigLines.join('\n');
+            const fullSignature = (annotations.length > 0 ? annotations.join('\n') + '\n' + signature : signature).trim();
+            typesIndex[structName] = { kind: 'struct', doc, signature: fullSignature, filePath, line: i, character: Math.max(0, charIndex) };
+            fileSymbols.enums.add(structName); // Reuse enums set for structs tracking
+            
+            // Parse struct functions inside the block
+            structFunctionsIndex[structName] = structFunctionsIndex[structName] || {};
+            if (braceStart !== -1) {
+                let j = braceStart + 1;
+                let brace = 1; // We've already seen the opening brace
+                while (j < lines.length && brace > 0) {
+                    const l = lines[j];
+                    const lt = l.trim();
+                    // Update brace count
+                    brace += (l.match(/\{/g) || []).length - (l.match(/\}/g) || []).length;
+                    if (brace === 0) break; // Reached closing brace
+                    
+                    // Check for function declaration: fn name(
+                    const fnMatch = /^fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(lt);
+                    if (fnMatch) {
+                        const funcName = fnMatch[1];
+                        const funcCharIndex = l.indexOf(funcName);
+                        const { doc: fdoc, annotations: fannotations } = getDocAbove(j);
+                        
+                        // Collect multi-line signature until closing parenthesis
+                        let funcSignatureLines = [l];
+                        let funcK = j + 1;
+                        let funcParenCount = (l.match(/\(/g) || []).length - (l.match(/\)/g) || []).length;
+                        while (funcK < lines.length && funcParenCount > 0) {
+                            const nextLine = lines[funcK];
+                            if (nextLine.trim() === '') break; // stop at empty line
+                            funcSignatureLines.push(nextLine);
+                            funcParenCount += (nextLine.match(/\(/g) || []).length - (nextLine.match(/\)/g) || []).length;
+                            funcK++;
+                        }
+                        const funcSignature = funcSignatureLines.join('\n');
+                        const funcFullSignature = (fannotations.length > 0 ? fannotations.join('\n') + '\n' + funcSignature : funcSignature).trim();
+                        
+                        // Parse parameters
+                        const openIdx = funcSignature.indexOf('(');
+                        const closeIdx = funcSignature.lastIndexOf(')');
+                        const params = [];
+                        if (openIdx !== -1 && closeIdx !== -1 && closeIdx > openIdx) {
+                            const paramStr = funcSignature.slice(openIdx + 1, closeIdx);
+                            const parts = splitTopLevel(paramStr, ',');
+                            for (const rawParam of parts) {
+                                const p = rawParam.trim();
+                                if (!p) continue;
+                                const paramMatch = /^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^=]+?)(?:\s*=\s*(.+))?\s*$/.exec(p);
+                                if (paramMatch) {
+                                    const pname = paramMatch[1].trim();
+                                    const ptype = paramMatch[2].trim();
+                                    const pdef = paramMatch[3] ? paramMatch[3].trim() : undefined;
+                                    params.push({ name: pname, type: ptype, defaultValue: pdef });
+                                }
+                            }
+                        }
+                        
+                        structFunctionsIndex[structName][funcName] = {
+                            doc: fdoc,
+                            signature: funcFullSignature,
+                            filePath,
+                            line: j,
+                            character: Math.max(0, funcCharIndex),
+                            params
+                        };
+                    }
+                    j++;
+                }
+            }
+            i = Math.max(i, k - 1);
             continue;
         }
         // constants: const NAME = ...
@@ -1859,20 +2027,92 @@ function indexTypesInFile(filePath) {
             const structName = m[1];
             const charIndex = raw.indexOf(structName);
             const { doc, annotations } = getDocAbove(i);
-            // Capture signature possibly inline or multi-line
+            // Capture signature possibly inline or multi-line until opening brace
             let sigLines = [raw];
             let k = i + 1;
-            // If struct has parentheses, collect until balanced or until '{...}' or end of line
-            let paren = (raw.match(/\(/g) || []).length - (raw.match(/\)/g) || []).length;
-            while (k < lines.length && (paren > 0)) {
-                sigLines.push(lines[k]);
+            // Find the opening brace - check current line first
+            let braceStart = raw.indexOf('{') !== -1 ? i : -1;
+            // Find the opening brace on subsequent lines if not found on current line
+            while (k < lines.length && braceStart === -1) {
                 const s = lines[k];
-                paren += (s.match(/\(/g) || []).length - (s.match(/\)/g) || []).length;
+                const braceIdx = s.indexOf('{');
+                if (braceIdx !== -1) {
+                    braceStart = k;
+                    sigLines.push(s);
+                    break;
+                }
+                sigLines.push(s);
                 k++;
             }
             const signature = sigLines.join('\n');
             const fullSignature = annotations.length > 0 ? annotations.join('\n') + '\n' + signature : signature;
             typesIndex[structName] = { kind: 'struct', doc, signature: fullSignature, filePath, line: i, character: Math.max(0, charIndex) };
+            
+            // Parse struct functions inside the block
+            structFunctionsIndex[structName] = structFunctionsIndex[structName] || {};
+            if (braceStart !== -1) {
+                let j = braceStart + 1;
+                let brace = 1; // We've already seen the opening brace
+                while (j < lines.length && brace > 0) {
+                    const l = lines[j];
+                    const lt = l.trim();
+                    // Update brace count
+                    brace += (l.match(/\{/g) || []).length - (l.match(/\}/g) || []).length;
+                    if (brace === 0) break; // Reached closing brace
+                    
+                    // Check for function declaration: fn name(
+                    const fnMatch = /^fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/.exec(lt);
+                    if (fnMatch) {
+                        const funcName = fnMatch[1];
+                        const funcCharIndex = l.indexOf(funcName);
+                        const { doc: fdoc, annotations: fannotations } = getDocAbove(j);
+                        
+                        // Collect multi-line signature until closing parenthesis
+                        let funcSignatureLines = [l];
+                        let funcK = j + 1;
+                        let funcParenCount = (l.match(/\(/g) || []).length - (l.match(/\)/g) || []).length;
+                        while (funcK < lines.length && funcParenCount > 0) {
+                            const nextLine = lines[funcK];
+                            if (nextLine.trim() === '') break; // stop at empty line
+                            funcSignatureLines.push(nextLine);
+                            funcParenCount += (nextLine.match(/\(/g) || []).length - (nextLine.match(/\)/g) || []).length;
+                            funcK++;
+                        }
+                        const funcSignature = funcSignatureLines.join('\n');
+                        const funcFullSignature = (fannotations.length > 0 ? fannotations.join('\n') + '\n' + funcSignature : funcSignature).trim();
+                        
+                        // Parse parameters
+                        const openIdx = funcSignature.indexOf('(');
+                        const closeIdx = funcSignature.lastIndexOf(')');
+                        const params = [];
+                        if (openIdx !== -1 && closeIdx !== -1 && closeIdx > openIdx) {
+                            const paramStr = funcSignature.slice(openIdx + 1, closeIdx);
+                            const parts = splitTopLevel(paramStr, ',');
+                            for (const rawParam of parts) {
+                                const p = rawParam.trim();
+                                if (!p) continue;
+                                const paramMatch = /^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*([^=]+?)(?:\s*=\s*(.+))?\s*$/.exec(p);
+                                if (paramMatch) {
+                                    const pname = paramMatch[1].trim();
+                                    const ptype = paramMatch[2].trim();
+                                    const pdef = paramMatch[3] ? paramMatch[3].trim() : undefined;
+                                    params.push({ name: pname, type: ptype, defaultValue: pdef });
+                                }
+                            }
+                        }
+                        
+                        structFunctionsIndex[structName][funcName] = {
+                            doc: fdoc,
+                            signature: funcFullSignature,
+                            filePath,
+                            line: j,
+                            character: Math.max(0, funcCharIndex),
+                            params
+                        };
+                    }
+                    j++;
+                }
+            }
         }
     }
 }
