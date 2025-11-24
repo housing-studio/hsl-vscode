@@ -105,7 +105,7 @@
 			"patterns": [
 				{
 					"name": "constant.language",
-					"match": "\\b(fn|command|region|menu|event|scoreboard|if|else|macro|while|for|switch|let|return|random)\\b"
+					"match": "\\b(fn|command|region|menu|event|scoreboard|if|else|macro|while|for|match|let|return|random)\\b"
 				}
 			]
 		},
