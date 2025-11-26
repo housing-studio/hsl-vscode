@@ -140,11 +140,6 @@
 					"match": "\\b(struct|enum)\\b"
 				},
 				{
-					"name": "entity.name.type",
-					"match": "\\b\\w+(?=\\s+\\w+)",
-					"scope": "entity.name"
-				},
-				{
 					"name": "keyword.other",
 					"match": "@([A-Za-z]+)",
 					"captures": {
@@ -152,14 +147,6 @@
 							"name": "keyword.other"
 						}
 					}
-				},
-				{
-					"name": "entity.name.type",
-					"match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b(?=\\s+[a-zA-Z_][a-zA-Z0-9_]*)"
-				},
-				{
-					"name": "entity.name.type",
-					"match": "\\b[a-zA-Z_][a-zA-Z0-9_]*\\b(\\s*\\[\\]\\s*)+(?=\\b[a-zA-Z_][a-zA-Z0-9_]*\\b)"
 				},
 				{
 					"name": "entity.name.type",
