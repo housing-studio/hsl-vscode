@@ -826,9 +826,9 @@ function activate(context) {
                     }
                 }
 
-                // If inside a stat declaration type position: "stat <ns> <name>: <Type>"
+                // If inside a stat declaration type position: "stat [namespace] [teamnamestring] <name>: <Type>"
                 {
-                    const statTypeMatch = /(^|\s)stat\s+(player|team|global)\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*([A-Za-z_]*)$/.exec(before);
+                    const statTypeMatch = /(^|\s)stat\s+(?:(player|team|global)\s+)?(?:"[^"]+"\s+)?[A-Za-z_][A-Za-z0-9_]*\s*:\s*([A-Za-z_]*)$/.exec(before);
                     if (statTypeMatch) {
                         const afterColonIdx = before.lastIndexOf(':') + 1;
                         const spacesMatch = /^\s*/.exec(before.slice(afterColonIdx)) || [''];
@@ -1087,12 +1087,25 @@ function activate(context) {
                     'return ${1:value}',
                     'return statement'
                 ));
-                const statSnippet = 'stat ' + '${1|' + namespaces.join(',') + '|} ' + '${2:varName}';
+                // stat snippet: stat [namespace] varName[: type] [= value]
+                // Main stat snippet with namespace choice (player/global) - no team name
                 items.push(mkSnippet(
-                    'stat',
-                    statSnippet,
-                    'declare local variable (stat)'
+                    'stat (implicit player)',
+                    'stat ${1:name}: ${2:type}',
+                    'declare player stat'
                 ));
+                items.push(mkSnippet(
+                    'stat global',
+                    'stat global ${2:name}: ${3:type}',
+                    'declare global stat'
+                ));
+                // Stat with team namespace - includes team name prompt
+                items.push(mkSnippet(
+                    'stat team',
+                    'stat team "${1:MyTeam}" ${2:name}: ${3:type}',
+                    'declare team stat'
+                ));
+                // Stat without namespace: stat varName: type (implicit player namespace)
                 items.push(mkSnippet(
                     'const',
                     'const ${1:NAME} = ${2:value}',
@@ -1906,23 +1919,41 @@ function indexTextDocument(document) {
             });
             continue;
         }
-        // stats: stat <namespace> <name>
-        m = /^stat\s+(player|team|global)\s+([A-Za-z_][A-Za-z0-9_]*)\b/.exec(t);
+        // stats: stat [namespace] [teamnamestring] <varname>[: type] [= value]
+        // Examples:
+        //   stat varName: int = 123
+        //   stat foo = 123
+        //   stat global abc = "Hello"
+        //   stat team "Red" bar = 123
+        // Pattern: stat [namespace] [team "name"] <varname>[: type] [= value]
+        // Try pattern with namespace first, then check if team name string follows
+        m = /^stat\s+(?:(player|team|global)\s+)?("([^"]+)"\s+)?([A-Za-z_][A-Za-z0-9_]*)(?:\s*:\s*[^=]*)?(?:\s*=.*)?$/.exec(t);
         if (m) {
-            const ns = m[1];
-            const name = m[2];
+            let ns = m[1] || null; // namespace (player|team|global) or null if not specified
+            const teamName = m[3] || null; // team name string if present (only when namespace is team)
+            const name = m[4]; // variable name
+            // If team name string is present, namespace must be team
+            if (teamName && ns !== 'team') {
+                // If we have a team name string but namespace wasn't team, 
+                // check if the previous token was "team"
+                const beforeVar = t.substring(0, t.indexOf(name)).trim();
+                if (beforeVar.endsWith('"') && beforeVar.includes('team')) {
+                    ns = 'team';
+                }
+            }
+            const finalNamespace = teamName ? 'team' : (ns || null);
             const charIndex = raw.indexOf(name);
             const { doc, annotations } = getDocAbove(i);
             const fullSignature = (annotations.length > 0 ? annotations.join('\n') + '\n' + raw : raw).trim();
             const container = findContainerForLine(i);
             const containerKey = container ? `${container.kind}:${container.name}:${container.bodyStart}-${container.bodyEnd}` : '';
-            fileSymbols.stats.push({ namespace: ns, name, line: i, uri: document.uri });
+            fileSymbols.stats.push({ namespace: finalNamespace, name, line: i, uri: document.uri });
             const existing = workspaceIndex.stats.get(name) || [];
             existing.push({
                 uri: document.uri,
                 line: i,
                 character: charIndex,
-                namespace: ns,
+                namespace: finalNamespace,
                 signature: fullSignature,
                 doc,
                 container: containerKey
